@@ -22,13 +22,6 @@ jobs:
     # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
     - uses: actions/checkout@v2
       
-    - name: Hello world
-      run: echo Hello world $GITHUB_WORKSPACE $middle_name $Last_Name! && ls -lah $GITHUB_WORKSPACE
-      env:
-        FIRST_NAME: Mona
-        middle_name: The
-        Last_Name: Octocat
-
     - name: Build and push Docker images
       uses: docker/build-push-action@v1.1.0
       with:
