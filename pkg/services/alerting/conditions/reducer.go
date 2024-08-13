@@ -2,11 +2,10 @@ package conditions
 
 import (
 	"math"
-
 	"sort"
 
 	"github.com/grafana/grafana/pkg/components/null"
-	"github.com/grafana/grafana/pkg/tsdb"
+	"github.com/grafana/grafana/pkg/tsdb/legacydata"
 )
 
 // queryReducer reduces a timeseries to a nullable float
@@ -17,8 +16,8 @@ type queryReducer struct {
 	Type string
 }
 
-//nolint: gocyclo
-func (s *queryReducer) Reduce(series *tsdb.TimeSeries) null.Float {
+//nolint:gocyclo
+func (s *queryReducer) Reduce(series legacydata.DataTimeSeries) null.Float {
 	if len(series.Points) == 0 {
 		return null.FloatFromPtr(nil)
 	}
@@ -126,7 +125,7 @@ func newSimpleReducer(t string) *queryReducer {
 	return &queryReducer{Type: t}
 }
 
-func calculateDiff(series *tsdb.TimeSeries, allNull bool, value float64, fn func(float64, float64) float64) (bool, float64) {
+func calculateDiff(series legacydata.DataTimeSeries, allNull bool, value float64, fn func(float64, float64) float64) (bool, float64) {
 	var (
 		points = series.Points
 		first  float64

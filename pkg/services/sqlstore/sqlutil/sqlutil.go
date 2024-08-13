@@ -10,11 +10,12 @@ type TestDB struct {
 	ConnStr    string
 }
 
-func Sqlite3TestDB() TestDB {
+func SQLite3TestDB() TestDB {
 	// To run all tests in a local test database, set ConnStr to "grafana_test.db"
 	return TestDB{
 		DriverName: "sqlite3",
-		ConnStr:    ":memory:",
+		// ConnStr specifies an In-memory database shared between connections.
+		ConnStr: "file::memory:?cache=shared",
 	}
 }
 
@@ -27,9 +28,10 @@ func MySQLTestDB() TestDB {
 	if port == "" {
 		port = "3306"
 	}
+	conn_str := fmt.Sprintf("grafana:password@tcp(%s:%s)/grafana_tests?collation=utf8mb4_unicode_ci&sql_mode='ANSI_QUOTES'&parseTime=true", host, port)
 	return TestDB{
 		DriverName: "mysql",
-		ConnStr:    fmt.Sprintf("grafana:password@tcp(%s:%s)/grafana_tests?collation=utf8mb4_unicode_ci", host, port),
+		ConnStr:    conn_str,
 	}
 }
 

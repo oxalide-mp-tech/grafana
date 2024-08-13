@@ -1,28 +1,32 @@
-import React, { InputHTMLAttributes, FunctionComponent } from 'react';
-import { InlineFormLabel } from '@grafana/ui';
+import React from 'react';
 
-export interface Props extends InputHTMLAttributes<HTMLInputElement> {
+import { SelectableValue } from '@grafana/data';
+import { Field, Select } from '@grafana/ui';
+
+interface VariableQueryFieldProps {
+  onChange: (value: string) => void;
+  options: SelectableValue[];
+  value: string;
   label: string;
-  tooltip?: string;
-  children?: React.ReactNode;
+  allowCustomValue?: boolean;
 }
 
-export const QueryField: FunctionComponent<Partial<Props>> = ({ label, tooltip, children }) => (
-  <>
-    <InlineFormLabel width={9} className="query-keyword" tooltip={tooltip}>
-      {label}
-    </InlineFormLabel>
-    {children}
-  </>
-);
-
-export const QueryInlineField: FunctionComponent<Props> = ({ ...props }) => {
+export const VariableQueryField = ({
+  label,
+  onChange,
+  value,
+  options,
+  allowCustomValue = false,
+}: VariableQueryFieldProps) => {
   return (
-    <div className={'gf-form-inline'}>
-      <QueryField {...props} />
-      <div className="gf-form gf-form--grow">
-        <div className="gf-form-label gf-form-label--grow" />
-      </div>
-    </div>
+    <Field label={label}>
+      <Select
+        width={25}
+        allowCustomValue={allowCustomValue}
+        value={value}
+        onChange={({ value }) => onChange(value!)}
+        options={options}
+      />
+    </Field>
   );
 };

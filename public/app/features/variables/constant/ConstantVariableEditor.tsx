@@ -1,23 +1,26 @@
-import React, { ChangeEvent, FocusEvent, PureComponent } from 'react';
+import React, { FormEvent, PureComponent } from 'react';
+
 import { selectors } from '@grafana/e2e-selectors';
 
-import { ConstantVariableModel } from '../types';
+import { VariableLegend } from '../editor/VariableLegend';
+import { VariableTextField } from '../editor/VariableTextField';
 import { VariableEditorProps } from '../editor/types';
+import { ConstantVariableModel } from '../types';
 
 export interface Props extends VariableEditorProps<ConstantVariableModel> {}
 
 export class ConstantVariableEditor extends PureComponent<Props> {
-  onChange = (event: ChangeEvent<HTMLInputElement>) => {
+  onChange = (event: FormEvent<HTMLInputElement>) => {
     this.props.onPropChange({
       propName: 'query',
-      propValue: event.target.value,
+      propValue: event.currentTarget.value,
     });
   };
 
-  onBlur = (event: FocusEvent<HTMLInputElement>) => {
+  onBlur = (event: FormEvent<HTMLInputElement>) => {
     this.props.onPropChange({
       propName: 'query',
-      propValue: event.target.value,
+      propValue: event.currentTarget.value,
       updateOptions: true,
     });
   };
@@ -25,21 +28,16 @@ export class ConstantVariableEditor extends PureComponent<Props> {
   render() {
     return (
       <>
-        <div className="gf-form-group">
-          <h5 className="section-heading">Constant options</h5>
-          <div className="gf-form">
-            <span className="gf-form-label">Value</span>
-            <input
-              type="text"
-              className="gf-form-input"
-              value={this.props.variable.query}
-              onChange={this.onChange}
-              onBlur={this.onBlur}
-              placeholder="your metric prefix"
-              aria-label={selectors.pages.Dashboard.Settings.Variables.Edit.ConstantVariable.constantOptionsQueryInput}
-            />
-          </div>
-        </div>
+        <VariableLegend>Constant options</VariableLegend>
+        <VariableTextField
+          value={this.props.variable.query}
+          name="Value"
+          placeholder="your metric prefix"
+          onChange={this.onChange}
+          onBlur={this.onBlur}
+          testId={selectors.pages.Dashboard.Settings.Variables.Edit.ConstantVariable.constantOptionsQueryInputV2}
+          width={30}
+        />
       </>
     );
   }

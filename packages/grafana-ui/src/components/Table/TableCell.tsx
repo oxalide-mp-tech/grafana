@@ -1,20 +1,27 @@
-import React, { FC } from 'react';
+import React from 'react';
 import { Cell } from 'react-table';
-import { Field } from '@grafana/data';
-import { TableFilterActionCallback } from './types';
+
+import { TimeRange, DataFrame } from '@grafana/data';
+
 import { TableStyles } from './styles';
+import { GrafanaTableColumn, TableFilterActionCallback } from './types';
 
 export interface Props {
   cell: Cell;
-  field: Field;
   tableStyles: TableStyles;
   onCellFilterAdded?: TableFilterActionCallback;
+  columnIndex: number;
+  columnCount: number;
+  timeRange?: TimeRange;
+  userProps?: object;
+  frame: DataFrame;
 }
 
-export const TableCell: FC<Props> = ({ cell, field, tableStyles, onCellFilterAdded }) => {
+export const TableCell = ({ cell, tableStyles, onCellFilterAdded, timeRange, userProps, frame }: Props) => {
   const cellProps = cell.getCellProps();
+  const field = (cell.column as unknown as GrafanaTableColumn).field;
 
-  if (!field.display) {
+  if (!field?.display) {
     return null;
   }
 
@@ -23,6 +30,8 @@ export const TableCell: FC<Props> = ({ cell, field, tableStyles, onCellFilterAdd
     cellProps.style.justifyContent = (cell.column as any).justifyContent;
   }
 
+  let innerWidth = (typeof cell.column.width === 'number' ? cell.column.width : 24) - tableStyles.cellPadding * 2;
+
   return (
     <>
       {cell.render('Cell', {
@@ -30,6 +39,10 @@ export const TableCell: FC<Props> = ({ cell, field, tableStyles, onCellFilterAdd
         tableStyles,
         onCellFilterAdded,
         cellProps,
+        innerWidth,
+        timeRange,
+        userProps,
+        frame,
       })}
     </>
   );

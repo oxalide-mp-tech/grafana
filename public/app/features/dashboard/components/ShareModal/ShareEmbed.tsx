@@ -1,118 +1,96 @@
-import React, { PureComponent } from 'react';
-import { LegacyForms, Icon } from '@grafana/ui';
-const { Select, Switch } = LegacyForms;
-import { SelectableValue } from '@grafana/data';
-import { DashboardModel, PanelModel } from 'app/features/dashboard/state';
+import React, { FormEvent, useEffect, useState } from 'react';
+import { useEffectOnce } from 'react-use';
+
+import { RawTimeRange, TimeRange } from '@grafana/data';
+import { reportInteraction } from '@grafana/runtime';
+import { ClipboardButton, Field, Modal, Switch, TextArea } from '@grafana/ui';
+import { t, Trans } from 'app/core/internationalization';
+import { DashboardInteractions } from 'app/features/dashboard-scene/utils/interactions';
+
+import { ThemePicker } from './ThemePicker';
+import { ShareModalTabProps } from './types';
 import { buildIframeHtml } from './utils';
 
-const themeOptions: Array<SelectableValue<string>> = [
-  { label: 'current', value: 'current' },
-  { label: 'dark', value: 'dark' },
-  { label: 'light', value: 'light' },
-];
-
-interface Props {
-  dashboard: DashboardModel;
-  panel?: PanelModel;
+interface Props extends Omit<ShareModalTabProps, 'panel' | 'dashboard'> {
+  panel?: { timeFrom?: string; id: number };
+  dashboard: { uid: string; time: RawTimeRange };
+  range?: TimeRange;
+  buildIframe?: typeof buildIframeHtml;
 }
 
-interface State {
-  useCurrentTimeRange: boolean;
-  includeTemplateVars: boolean;
-  selectedTheme: SelectableValue<string>;
-  iframeHtml: string;
-}
+export function ShareEmbed({ panel, dashboard, range, buildIframe = buildIframeHtml }: Props) {
+  const [useCurrentTimeRange, setUseCurrentTimeRange] = useState(true);
+  const [selectedTheme, setSelectedTheme] = useState('current');
+  const [iframeHtml, setIframeHtml] = useState('');
 
-export class ShareEmbed extends PureComponent<Props, State> {
-  constructor(props: Props) {
-    super(props);
-    this.state = {
-      useCurrentTimeRange: true,
-      includeTemplateVars: true,
-      selectedTheme: themeOptions[0],
-      iframeHtml: '',
-    };
-  }
+  useEffectOnce(() => {
+    reportInteraction('grafana_dashboards_embed_share_viewed');
+  });
 
-  componentDidMount() {
-    this.buildIframeHtml();
-  }
+  useEffect(() => {
+    const newIframeHtml = buildIframe(useCurrentTimeRange, dashboard.uid, selectedTheme, panel, range);
+    setIframeHtml(newIframeHtml);
+  }, [selectedTheme, useCurrentTimeRange, dashboard, panel, range, buildIframe]);
 
-  buildIframeHtml = () => {
-    const { panel } = this.props;
-    const { useCurrentTimeRange, includeTemplateVars, selectedTheme } = this.state;
-
-    const iframeHtml = buildIframeHtml(useCurrentTimeRange, includeTemplateVars, selectedTheme.value, panel);
-    this.setState({ iframeHtml });
+  const onIframeHtmlChange = (event: FormEvent<HTMLTextAreaElement>) => {
+    setIframeHtml(event.currentTarget.value);
   };
 
-  onUseCurrentTimeRangeChange = () => {
-    this.setState(
-      {
-        useCurrentTimeRange: !this.state.useCurrentTimeRange,
-      },
-      this.buildIframeHtml
-    );
+  const onUseCurrentTimeRangeChange = () => {
+    setUseCurrentTimeRange((useCurTimeRange) => !useCurTimeRange);
   };
 
-  onIncludeTemplateVarsChange = () => {
-    this.setState(
-      {
-        includeTemplateVars: !this.state.includeTemplateVars,
-      },
-      this.buildIframeHtml
-    );
+  const onThemeChange = (value: string) => {
+    setSelectedTheme(value);
   };
 
-  onThemeChange = (value: SelectableValue<string>) => {
-    this.setState(
-      {
-        selectedTheme: value,
-      },
-      this.buildIframeHtml
-    );
-  };
+  const isRelativeTime = dashboard.time.to === 'now';
+  const timeRangeDescription = isRelativeTime
+    ? t(
+        'share-modal.embed.time-range-description',
+        'Transforms the current relative time range to an absolute time range'
+      )
+    : '';
 
-  render() {
-    const { useCurrentTimeRange, includeTemplateVars, selectedTheme, iframeHtml } = this.state;
-
-    return (
-      <div className="share-modal-body">
-        <div className="share-modal-header">
-          <Icon name="link" className="share-modal-big-icon" size="xxl" />
-          <div className="share-modal-content">
-            <div className="gf-form-group">
-              <Switch
-                labelClass="width-12"
-                label="Current time range"
-                checked={useCurrentTimeRange}
-                onChange={this.onUseCurrentTimeRangeChange}
-              />
-              <Switch
-                labelClass="width-12"
-                label="Template variables"
-                checked={includeTemplateVars}
-                onChange={this.onIncludeTemplateVarsChange}
-              />
-              <div className="gf-form">
-                <label className="gf-form-label width-12">Theme</label>
-                <Select width={10} options={themeOptions} value={selectedTheme} onChange={this.onThemeChange} />
-              </div>
-            </div>
-
-            <p className="share-modal-info-text">
-              The html code below can be pasted and included in another web page. Unless anonymous access is enabled,
-              the user viewing that page need to be signed into grafana for the graph to load.
-            </p>
-
-            <div className="gf-form-group gf-form--grow">
-              <div className="gf-form">
-                <textarea rows={5} data-share-panel-url className="gf-form-input" defaultValue={iframeHtml}></textarea>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  return (
+    <>
+      <p className="share-modal-info-text">
+        <Trans i18nKey="share-modal.embed.info">Generate HTML for embedding an iframe with this panel.</Trans>
+      </p>
+      <Field label={t('share-modal.embed.time-range', 'Current time range')} description={timeRangeDescription}>
+        <Switch id="share-current-time-range" value={useCurrentTimeRange} onChange={onUseCurrentTimeRangeChange} />
+      </Field>
+      <ThemePicker selectedTheme={selectedTheme} onChange={onThemeChange} />
+      <Field
+        label={t('share-modal.embed.html', 'Embed HTML')}
+        description={t(
+          'share-modal.embed.html-description',
+          'The HTML code below can be pasted and included in another web page. Unless anonymous access is enabled, the user viewing that page need to be signed into Grafana for the graph to load.'
+        )}
+      >
+        <TextArea
+          data-testid="share-embed-html"
+          id="share-panel-embed-embed-html-textarea"
+          rows={5}
+          value={iframeHtml}
+          onChange={onIframeHtmlChange}
+        />
+      </Field>
+      <Modal.ButtonRow>
+        <ClipboardButton
+          icon="copy"
+          variant="primary"
+          getText={() => iframeHtml}
+          onClipboardCopy={() => {
+            DashboardInteractions.embedSnippetCopy({
+              currentTimeRange: useCurrentTimeRange,
+              theme: selectedTheme,
+            });
+          }}
+        >
+          <Trans i18nKey="share-modal.embed.copy">Copy to clipboard</Trans>
+        </ClipboardButton>
+      </Modal.ButtonRow>
+    </>
+  );
 }

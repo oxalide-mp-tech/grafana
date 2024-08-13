@@ -1,31 +1,30 @@
-import React, { FC, useCallback, useEffect, useMemo, useState } from 'react';
-import { Input, Tooltip } from '@grafana/ui';
-import { defaultIntervals } from '@grafana/ui/src/components/RefreshPicker/RefreshPicker';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+
+import { Input, defaultIntervals, Field } from '@grafana/ui';
+import { t } from 'app/core/internationalization';
 
 import { getTimeSrv } from '../../services/TimeSrv';
 
 export interface Props {
-  renderCount: number; // hack to make sure Angular changes are propagated properly, please remove when DashboardSettings are migrated to React
-  refreshIntervals: string[];
+  refreshIntervals?: string[];
   onRefreshIntervalChange: (interval: string[]) => void;
   getIntervalsFunc?: typeof getValidIntervals;
   validateIntervalsFunc?: typeof validateIntervals;
 }
 
-export const AutoRefreshIntervals: FC<Props> = ({
-  renderCount,
+export const AutoRefreshIntervals = ({
   refreshIntervals,
   onRefreshIntervalChange,
   getIntervalsFunc = getValidIntervals,
   validateIntervalsFunc = validateIntervals,
-}) => {
+}: Props) => {
   const [intervals, setIntervals] = useState<string[]>(getIntervalsFunc(refreshIntervals ?? defaultIntervals));
   const [invalidIntervalsMessage, setInvalidIntervalsMessage] = useState<string | null>(null);
 
   useEffect(() => {
     const intervals = getIntervalsFunc(refreshIntervals ?? defaultIntervals);
     setIntervals(intervals);
-  }, [renderCount, refreshIntervals]);
+  }, [getIntervalsFunc, refreshIntervals]);
 
   const intervalsString = useMemo(() => {
     if (!Array.isArray(intervals)) {
@@ -55,20 +54,27 @@ export const AutoRefreshIntervals: FC<Props> = ({
 
       setInvalidIntervalsMessage(invalidMessage);
     },
-    [intervals, onRefreshIntervalChange, setInvalidIntervalsMessage]
+    [getIntervalsFunc, intervals, onRefreshIntervalChange, validateIntervalsFunc]
   );
 
   return (
-    <div className="gf-form">
-      <label className="gf-form-label width-7">Auto-refresh</label>
-      {invalidIntervalsMessage ? (
-        <Tooltip placement="right" content={invalidIntervalsMessage}>
-          <Input width={60} invalid value={intervalsString} onChange={onIntervalsChange} onBlur={onIntervalsBlur} />
-        </Tooltip>
-      ) : (
-        <Input width={60} value={intervalsString} onChange={onIntervalsChange} onBlur={onIntervalsBlur} />
+    <Field
+      label={t('dashboard-settings.general.auto-refresh-label', 'Auto refresh')}
+      description={t(
+        'dashboard-settings.general.auto-refresh-description',
+        'Define the auto refresh intervals that should be available in the auto refresh list.'
       )}
-    </div>
+      error={invalidIntervalsMessage}
+      invalid={!!invalidIntervalsMessage}
+    >
+      <Input
+        id="auto-refresh-input"
+        invalid={!!invalidIntervalsMessage}
+        value={intervalsString}
+        onChange={onIntervalsChange}
+        onBlur={onIntervalsBlur}
+      />
+    </Field>
   );
 };
 
@@ -80,7 +86,7 @@ export const validateIntervals = (
     getValidIntervals(intervals, dependencies);
     return null;
   } catch (err) {
-    return err.message;
+    return err instanceof Error ? err.message : 'Invalid intervals';
   }
 };
 
@@ -88,6 +94,6 @@ export const getValidIntervals = (
   intervals: string[],
   dependencies: { getTimeSrv: typeof getTimeSrv } = { getTimeSrv }
 ) => {
-  const cleanIntervals = intervals.filter(i => i.trim() !== '').map(interval => interval.replace(/\s+/g, ''));
+  const cleanIntervals = intervals.filter((i) => i.trim() !== '').map((interval) => interval.replace(/\s+/g, ''));
   return [...new Set(dependencies.getTimeSrv().getValidIntervals(cleanIntervals))];
 };

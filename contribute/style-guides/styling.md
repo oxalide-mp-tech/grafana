@@ -4,106 +4,77 @@
 
 ## Usage
 
-### Basic styling
-
 For styling components, use [Emotion's `css` function](https://emotion.sh/docs/emotion#css).
 
-```tsx
-import React from 'react';
-import { css } from 'emotion';
-
-const ComponentA = () => (
-  <div
-    className={css`
-      background: red;
-    `}
-  >
-    As red as you can get
-  </div>
-);
-```
-
-### Styling with theme
+### Basic styling
 
 To access the theme in your styles, use the `useStyles` hook. It provides basic memoization and access to the theme object.
 
+> Please remember to put `getStyles` function at the end of the file!
+
 ```tsx
-import React, { FC } from 'react';
-import { GrafanaTheme } from '@grafana/data';
-import { useStyles } from '@grafana/ui';
-import { css } from 'emotion';
+import React from 'react';
+import { GrafanaTheme2 } from '@grafana/data';
+import { useStyles2 } from '@grafana/ui';
+import { css } from '@emotion/css';
 
-const getComponentStyles = (theme: GrafanaTheme) => css`
-  padding: ${theme.spacing.md};
-`;
+const Foo = (props: FooProps) => {
+  const styles = useStyles2(getStyles);
 
-const Foo: FC<FooProps> = () => {
-  const styles = useStyles(getComponentsStyles);
-
-  // Use styles with className
+  // Use styles with classNames
+  return <div className={styles}>...</div>;
 };
+
+const getStyles = (theme: GrafanaTheme2) =>
+  css({
+    padding: theme.spacing(1, 2), // will result in 8px 16px padding
+  });
 ```
 
 ### Styling complex components
 
-In more complex cases, especially when you need to style multiple DOM elements in one component, or when using styles that depend on properties and/or state, you should create a helper function that returns an object of styles. This function should also be wrapped in the `stylesFactory` helper function, which will provide basic memoization.
+In more complex cases, especially when you need to style multiple DOM elements in one component, or when using styles that depend on properties and/or state you
+can have your getStyles function return an object with many class names and use [Emotion's `cx` function](https://emotion.sh/docs/@emotion/css#cx) to compose them.
 
-Let's say you need to style a component that has a different background depending on the theme:
+Let's say you need to style a component that has a different background depending on the `isActive` property :
 
 ```tsx
+import { css, cx } from '@emotion/css';
 import React from 'react';
-import { css } from 'emotion';
-import { GrafanaTheme } from '@grafana/data';
-import { selectThemeVariant, stylesFactory, useTheme } from '@grafana/ui';
 
-const getStyles = stylesFactory((theme: GrafanaTheme) => {
-  const backgroundColor = selectThemeVariant({ light: theme.colors.red, dark: theme.colors.blue }, theme.type);
+import { GrafanaTheme2 } from '@grafana/data';
+import { useStyles2 } from '@grafana/ui';
 
-  return {
-    wrapper: css`
-      background: ${backgroundColor};
-    `,
-    icon: css`
-      font-size: ${theme.typography.size.sm};
-    `,
-  };
-});
+interface ComponentAProps {
+  isActive: boolean;
+}
 
-const ComponentA = () => {
-  const theme = useTheme();
-  const styles = getStyles(theme);
+const ComponentA = ({ isActive }: ComponentAProps) => {
+  const styles = useStyles2(getStyles);
 
   return (
-    <div className={styles.wrapper}>
+    <div className={cx(styles.wrapper, isActive && styles.active)}>
       As red as you can get
       <i className={styles.icon} />
     </div>
   );
 };
+
+// Mind, that you can pass multiple arguments, theme included
+const getStyles = (theme: GrafanaTheme2) => {
+  return {
+    wrapper: css({
+      background: theme.colors.background.secondary,
+    }),
+    active: css({
+      background: theme.colors.primary.main,
+      text: theme.colors.primary.contrastText,
+    }),
+    icon: css({
+      fontSize: theme.typography.bodySmall.fontSize,
+    }),
+  };
+};
 ```
 
 For more information about themes at Grafana please see the [themes guide](./themes.md).
-
-### Composing class names
-
-For class composition, use [Emotion's `cx` function](https://emotion.sh/docs/emotion#cx).
-
-```tsx
-import React from 'react';
-import { css, cx } from 'emotion';
-
-interface Props {
-  className?: string;
-}
-
-const ComponentA: React.FC<Props> = ({ className }) => {
-  const finalClassName = cx(
-    className,
-    css`
-      background: red;
-    `
-  );
-
-  return <div className={finalClassName}>As red as you can ge</div>;
-};
-```

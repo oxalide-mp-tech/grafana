@@ -1,14 +1,15 @@
-.PHONY: docs docs-test
+.ONESHELL:
+.DELETE_ON_ERROR:
+export SHELL     := bash
+export SHELLOPTS := pipefail:errexit
+MAKEFLAGS += --warn-undefined-variables
+MAKEFLAGS += --no-builtin-rule
 
-IMAGE = grafana/docs-base:latest
+include docs.mk
 
-docs:
-	docker pull ${IMAGE}
-	docker run -v $(shell pwd)/sources:/hugo/content/docs/grafana/latest -p 3002:3002 --rm -it $(IMAGE) /bin/bash -c 'make server'
-
-docs-no-pull:
-	docker run -v $(shell pwd)/sources:/hugo/content/docs/grafana/latest -p 3002:3002 --rm -it $(IMAGE) /bin/bash -c 'make server'
-
-docs-test:
-	docker pull ${IMAGE}
-	docker run -v $(shell pwd)/sources:/hugo/content/docs/grafana/latest --rm -it $(IMAGE) /bin/bash -c 'make prod'
+.PHONY: sources/panels-visualizations/query-transform-data/transform-data/index.md
+sources/panels-visualizations/query-transform-data/transform-data/index.md: ## Generate the Transform Data page source.
+sources/panels-visualizations/query-transform-data/transform-data/index.md:
+	cd $(CURDIR)/.. && npx tsc ./scripts/docs/generate-transformations.ts && \
+	node ./scripts/docs/generate-transformations.js > $(CURDIR)/$@ && \
+	npx prettier -w $(CURDIR)/$@

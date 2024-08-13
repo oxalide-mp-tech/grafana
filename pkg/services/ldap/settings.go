@@ -2,16 +2,18 @@ package ldap
 
 import (
 	"fmt"
-	"io/ioutil"
+	"os"
 	"sync"
 
 	"github.com/BurntSushi/toml"
 
 	"github.com/grafana/grafana/pkg/infra/log"
-	"github.com/grafana/grafana/pkg/models"
+	"github.com/grafana/grafana/pkg/services/org"
 	"github.com/grafana/grafana/pkg/setting"
-	"github.com/grafana/grafana/pkg/util/errutil"
+	"github.com/grafana/grafana/pkg/util"
 )
+
+const defaultTimeout = 10
 
 // Config holds list of connections to LDAP
 type Config struct {
@@ -20,17 +22,24 @@ type Config struct {
 
 // ServerConfig holds connection data to LDAP
 type ServerConfig struct {
-	Host          string       `toml:"host"`
-	Port          int          `toml:"port"`
-	UseSSL        bool         `toml:"use_ssl"`
-	StartTLS      bool         `toml:"start_tls"`
-	SkipVerifySSL bool         `toml:"ssl_skip_verify"`
-	RootCACert    string       `toml:"root_ca_cert"`
-	ClientCert    string       `toml:"client_cert"`
-	ClientKey     string       `toml:"client_key"`
-	BindDN        string       `toml:"bind_dn"`
-	BindPassword  string       `toml:"bind_password"`
-	Attr          AttributeMap `toml:"attributes"`
+	Host string `toml:"host"`
+	Port int    `toml:"port"`
+
+	UseSSL        bool     `toml:"use_ssl"`
+	StartTLS      bool     `toml:"start_tls"`
+	SkipVerifySSL bool     `toml:"ssl_skip_verify"`
+	MinTLSVersion string   `toml:"min_tls_version"`
+	minTLSVersion uint16   `toml:"-"`
+	TLSCiphers    []string `toml:"tls_ciphers"`
+	tlsCiphers    []uint16 `toml:"-"`
+
+	RootCACert   string       `toml:"root_ca_cert"`
+	ClientCert   string       `toml:"client_cert"`
+	ClientKey    string       `toml:"client_key"`
+	BindDN       string       `toml:"bind_dn"`
+	BindPassword string       `toml:"bind_password"`
+	Timeout      int          `toml:"timeout"`
+	Attr         AttributeMap `toml:"attributes"`
 
 	SearchFilter  string   `toml:"search_filter"`
 	SearchBaseDNs []string `toml:"search_base_dns"`
@@ -60,7 +69,7 @@ type GroupToOrgRole struct {
 	// This pointer specifies if setting was set (for backwards compatibility)
 	IsGrafanaAdmin *bool `toml:"grafana_admin"`
 
-	OrgRole models.RoleType `toml:"org_role"`
+	OrgRole org.RoleType `toml:"org_role"`
 }
 
 // logger for all LDAP stuff
@@ -69,33 +78,18 @@ var logger = log.New("ldap")
 // loadingMutex locks the reading of the config so multiple requests for reloading are sequential.
 var loadingMutex = &sync.Mutex{}
 
-// IsEnabled checks if ldap is enabled
-func IsEnabled() bool {
-	return setting.LDAPEnabled
-}
-
-// ReloadConfig reads the config from the disc and caches it.
-func ReloadConfig() error {
-	if !IsEnabled() {
-		return nil
-	}
-
-	loadingMutex.Lock()
-	defer loadingMutex.Unlock()
-
-	var err error
-	config, err = readConfig(setting.LDAPConfigFile)
-	return err
-}
-
 // We need to define in this space so `GetConfig` fn
 // could be defined as singleton
 var config *Config
 
 // GetConfig returns the LDAP config if LDAP is enabled otherwise it returns nil. It returns either cached value of
 // the config or it reads it and caches it first.
-func GetConfig() (*Config, error) {
-	if !IsEnabled() {
+func GetConfig(cfg *setting.Cfg) (*Config, error) {
+	if cfg != nil {
+		if !cfg.LDAPAuthEnabled {
+			return nil, nil
+		}
+	} else if !cfg.LDAPAuthEnabled {
 		return nil, nil
 	}
 
@@ -107,10 +101,7 @@ func GetConfig() (*Config, error) {
 	loadingMutex.Lock()
 	defer loadingMutex.Unlock()
 
-	var err error
-	config, err = readConfig(setting.LDAPConfigFile)
-
-	return config, err
+	return readConfig(cfg.LDAPConfigFilePath)
 }
 
 func readConfig(configFile string) (*Config, error) {
@@ -118,48 +109,73 @@ func readConfig(configFile string) (*Config, error) {
 
 	logger.Info("LDAP enabled, reading config file", "file", configFile)
 
-	fileBytes, err := ioutil.ReadFile(configFile)
+	// nolint:gosec
+	// We can ignore the gosec G304 warning on this one because `filename` comes from grafana configuration file
+	fileBytes, err := os.ReadFile(configFile)
 	if err != nil {
-		return nil, errutil.Wrap("Failed to load LDAP config file", err)
+		return nil, fmt.Errorf("%v: %w", "Failed to load LDAP config file", err)
 	}
 
 	// interpolate full toml string (it can contain ENV variables)
 	stringContent, err := setting.ExpandVar(string(fileBytes))
 	if err != nil {
-		return nil, errutil.Wrap("Failed to expand variables", err)
+		return nil, fmt.Errorf("%v: %w", "Failed to expand variables", err)
 	}
 
 	_, err = toml.Decode(stringContent, result)
 	if err != nil {
-		return nil, errutil.Wrap("Failed to load LDAP config file", err)
+		return nil, fmt.Errorf("%v: %w", "Failed to load LDAP config file", err)
 	}
 
 	if len(result.Servers) == 0 {
 		return nil, fmt.Errorf("LDAP enabled but no LDAP servers defined in config file")
 	}
 
-	// set default org id
 	for _, server := range result.Servers {
+		// set default org id
 		err = assertNotEmptyCfg(server.SearchFilter, "search_filter")
 		if err != nil {
-			return nil, errutil.Wrap("Failed to validate SearchFilter section", err)
+			return nil, fmt.Errorf("%v: %w", "Failed to validate SearchFilter section", err)
 		}
 		err = assertNotEmptyCfg(server.SearchBaseDNs, "search_base_dns")
 		if err != nil {
-			return nil, errutil.Wrap("Failed to validate SearchBaseDNs section", err)
+			return nil, fmt.Errorf("%v: %w", "Failed to validate SearchBaseDNs section", err)
+		}
+
+		if server.MinTLSVersion != "" {
+			server.minTLSVersion, err = util.TlsNameToVersion(server.MinTLSVersion)
+			if err != nil {
+				logger.Error("Failed to set min TLS version. Ignoring", "err", err)
+			}
+		}
+
+		if len(server.TLSCiphers) > 0 {
+			server.tlsCiphers, err = util.TlsCiphersToIDs(server.TLSCiphers)
+			if err != nil {
+				logger.Error("Unrecognized TLS Cipher(s). Ignoring", "err", err)
+			}
 		}
 
 		for _, groupMap := range server.Groups {
+			if groupMap.OrgRole == "" && groupMap.IsGrafanaAdmin == nil {
+				return nil, fmt.Errorf("LDAP group mapping: organization role or grafana admin status is required")
+			}
+
 			if groupMap.OrgId == 0 {
 				groupMap.OrgId = 1
 			}
+		}
+
+		// set default timeout if unspecified
+		if server.Timeout == 0 {
+			server.Timeout = defaultTimeout
 		}
 	}
 
 	return result, nil
 }
 
-func assertNotEmptyCfg(val interface{}, propName string) error {
+func assertNotEmptyCfg(val any, propName string) error {
 	switch v := val.(type) {
 	case string:
 		if v == "" {

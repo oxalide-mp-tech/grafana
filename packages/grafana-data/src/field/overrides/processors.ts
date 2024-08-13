@@ -1,6 +1,14 @@
-import { DataLink, FieldOverrideContext, SelectableValue, ThresholdsConfig, ValueMapping } from '../../types';
+import {
+  DataLink,
+  Field,
+  FieldOverrideContext,
+  SelectableValue,
+  SliderMarks,
+  ThresholdsConfig,
+  ValueMapping,
+} from '../../types';
 
-export const identityOverrideProcessor = <T>(value: T, _context: FieldOverrideContext, _settings: any) => {
+export const identityOverrideProcessor = <T>(value: T) => {
   return value;
 };
 
@@ -24,6 +32,25 @@ export const numberOverrideProcessor = (
   return parseFloat(value);
 };
 
+export const displayNameOverrideProcessor = (
+  value: unknown,
+  context: FieldOverrideContext,
+  settings?: StringFieldConfigSettings
+) => {
+  // clear the cached display name
+  delete context.field?.state?.displayName;
+  return stringOverrideProcessor(value, context, settings);
+};
+
+export interface SliderFieldConfigSettings {
+  min: number;
+  max: number;
+  step?: number;
+  included?: boolean;
+  marks?: SliderMarks;
+  ariaLabelForHandle?: string;
+}
+
 export interface DataLinksFieldConfigSettings {}
 
 export const dataLinksOverrideProcessor = (
@@ -46,6 +73,8 @@ export const valueMappingsOverrideProcessor = (
 
 export interface SelectFieldConfigSettings<T> {
   allowCustomValue?: boolean;
+
+  isClearable?: boolean;
 
   /** The default options */
   options: Array<SelectableValue<T>>;
@@ -71,14 +100,14 @@ export interface StringFieldConfigSettings {
 }
 
 export const stringOverrideProcessor = (
-  value: any,
+  value: unknown,
   context: FieldOverrideContext,
   settings?: StringFieldConfigSettings
 ) => {
   if (value === null || value === undefined) {
     return value;
   }
-  if (settings && settings.expandTemplateVars && context.replaceVariables) {
+  if (settings && settings.expandTemplateVars && context.replaceVariables && typeof value === 'string') {
     return context.replaceVariables(value, context.field!.state!.scopedVars);
   }
   return `${value}`;
@@ -96,7 +125,9 @@ export const thresholdsOverrideProcessor = (
   return value as ThresholdsConfig; // !!!! likely not !!!!
 };
 
-export interface UnitFieldConfigSettings {}
+export interface UnitFieldConfigSettings {
+  isClearable?: boolean;
+}
 
 export const unitOverrideProcessor = (
   value: boolean,
@@ -114,8 +145,68 @@ export const booleanOverrideProcessor = (
   return value; // !!!! likely not !!!!
 };
 
-export interface ColorFieldConfigSettings {
-  allowUndefined?: boolean;
-  textWhenUndefined?: string; // Pick Color
-  disableNamedColors?: boolean;
+export interface FieldColorConfigSettings {
+  /**
+   * When switching to a visualization that does not support by value coloring then Grafana will
+   * switch to a by series palette based color mode
+   */
+  byValueSupport?: boolean;
+  /**
+   * When switching to a visualization that has this set to true then Grafana will change color mode
+   * to from thresholds if it was set to a by series palette
+   */
+  preferThresholdsMode?: boolean;
+  /**
+   * Set to true if the visualization supports both by value and by series
+   * This will enable the Color by series UI option that sets the `color.seriesBy` option.
+   */
+  bySeriesSupport?: boolean;
+}
+
+export interface StatsPickerConfigSettings {
+  /**
+   * Enable multi-selection in the stats picker
+   */
+  allowMultiple: boolean;
+  /**
+   * Default stats to be use in the stats picker
+   */
+  defaultStat?: string;
+}
+
+export enum FieldNamePickerBaseNameMode {
+  IncludeAll = 'all',
+  ExcludeBaseNames = 'exclude',
+  OnlyBaseNames = 'only',
+}
+
+export interface FieldNamePickerConfigSettings {
+  /**
+   * Function is a predicate, to test each element of the array.
+   * Return a value that coerces to true to keep the field, or to false otherwise.
+   */
+  filter?: (field: Field) => boolean;
+
+  /**
+   * Show this text when no values are found
+   */
+  noFieldsMessage?: string;
+
+  /**
+   * Sets the width to a pixel value.
+   */
+  width?: number;
+
+  /**
+   * Exclude names that can match a collection of values
+   */
+  baseNameMode?: FieldNamePickerBaseNameMode;
+
+  /**
+   * Placeholder text to display when nothing is selected.
+   */
+  placeholderText?: string;
+
+  /** When set to false, the value can not be removed */
+  isClearable?: boolean;
 }

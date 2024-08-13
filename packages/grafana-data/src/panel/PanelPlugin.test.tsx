@@ -1,7 +1,15 @@
 import React from 'react';
-import { identityOverrideProcessor, standardEditorsRegistry, standardFieldConfigEditorRegistry } from '../field';
+
+import { PanelOptionsEditorBuilder } from '..';
+import {
+  identityOverrideProcessor,
+  standardEditorsRegistry,
+  StandardEditorsRegistryItem,
+  standardFieldConfigEditorRegistry,
+} from '../field';
+import { FieldConfigProperty, FieldConfigPropertyItem } from '../types';
+
 import { PanelPlugin } from './PanelPlugin';
-import { FieldConfigProperty } from '../types';
 
 describe('PanelPlugin', () => {
   describe('declarative options', () => {
@@ -9,21 +17,21 @@ describe('PanelPlugin', () => {
       standardFieldConfigEditorRegistry.setInit(() => {
         return [
           {
-            id: 'min',
+            id: FieldConfigProperty.Min,
             path: 'min',
           },
           {
-            id: 'max',
+            id: FieldConfigProperty.Max,
             path: 'max',
           },
-        ] as any;
+        ] as FieldConfigPropertyItem[];
       });
       standardEditorsRegistry.setInit(() => {
         return [
           {
             id: 'number',
           },
-        ] as any;
+        ] as StandardEditorsRegistryItem[];
       });
     });
 
@@ -33,13 +41,15 @@ describe('PanelPlugin', () => {
       });
 
       panel.useFieldConfig({
-        useCustomConfig: builder => {
+        useCustomConfig: (builder) => {
           builder.addCustomEditor({
             id: 'custom',
             path: 'custom',
             name: 'Custom',
             description: 'Custom field config property description',
+            // eslint-disable-next-line react/display-name
             editor: () => <div>Editor</div>,
+            // eslint-disable-next-line react/display-name
             override: () => <div>Editor</div>,
             process: identityOverrideProcessor,
             settings: {},
@@ -56,19 +66,24 @@ describe('PanelPlugin', () => {
         return <div>Panel</div>;
       });
 
-      panel.setPanelOptions(builder => {
+      panel.setPanelOptions((builder) => {
         builder.addCustomEditor({
           id: 'option',
           path: 'option',
           name: 'Option editor',
           description: 'Option editor description',
+          // eslint-disable-next-line react/display-name
           editor: () => <div>Editor</div>,
           settings: {},
         });
       });
 
-      expect(panel.optionEditors).toBeDefined();
-      expect(panel.optionEditors!.list()).toHaveLength(1);
+      const supplier = panel.getPanelOptionsSupplier();
+      expect(supplier).toBeDefined();
+
+      const builder = new PanelOptionsEditorBuilder();
+      supplier(builder, { data: [] });
+      expect(builder.getItems()).toHaveLength(1);
     });
   });
 
@@ -79,7 +94,7 @@ describe('PanelPlugin', () => {
           return <div>Panel</div>;
         });
 
-        panel.setPanelOptions(builder => {
+        panel.setPanelOptions((builder) => {
           builder
             .addNumberInput({
               path: 'numericOption',
@@ -97,6 +112,7 @@ describe('PanelPlugin', () => {
               path: 'customOption',
               name: 'Option editor',
               description: 'Option editor description',
+              // eslint-disable-next-line react/display-name
               editor: () => <div>Editor</div>,
               settings: {},
               defaultValue: { value: 'Custom default value' },
@@ -116,7 +132,7 @@ describe('PanelPlugin', () => {
           return <div>Panel</div>;
         });
 
-        panel.setPanelOptions(builder => {
+        panel.setPanelOptions((builder) => {
           builder.addNumberInput({
             path: 'numericOption.nested',
             name: 'Option editor',
@@ -140,7 +156,7 @@ describe('PanelPlugin', () => {
         });
 
         panel.useFieldConfig({
-          useCustomConfig: builder => {
+          useCustomConfig: (builder) => {
             builder
               .addNumberInput({
                 path: 'numericOption',
@@ -158,7 +174,9 @@ describe('PanelPlugin', () => {
                 path: 'customOption',
                 name: 'Option editor',
                 description: 'Option editor description',
+                // eslint-disable-next-line react/display-name
                 editor: () => <div>Editor</div>,
+                // eslint-disable-next-line react/display-name
                 override: () => <div>Override editor</div>,
                 process: identityOverrideProcessor,
                 shouldApply: () => true,
@@ -176,13 +194,34 @@ describe('PanelPlugin', () => {
         expect(panel.fieldConfigDefaults.defaults.custom).toEqual(expectedDefaults);
       });
 
+      test('throw error with array fieldConfigs', () => {
+        const panel = new PanelPlugin(() => {
+          return <div>Panel</div>;
+        });
+
+        panel.useFieldConfig({
+          useCustomConfig: (builder) => {
+            builder.addCustomEditor({
+              id: 'somethingUnique',
+              path: 'numericOption[0]',
+              name: 'Option editor',
+              description: 'Option editor description',
+              defaultValue: 10,
+            } as FieldConfigPropertyItem);
+          },
+        });
+        expect(() => panel.fieldConfigRegistry).toThrowErrorMatchingInlineSnapshot(
+          `"[undefined] Field config paths do not support arrays: custom.somethingUnique"`
+        );
+      });
+
       test('default values for nested paths', () => {
         const panel = new PanelPlugin(() => {
           return <div>Panel</div>;
         });
 
         panel.useFieldConfig({
-          useCustomConfig: builder => {
+          useCustomConfig: (builder) => {
             builder.addNumberInput({
               path: 'numericOption.nested',
               name: 'Option editor',
@@ -210,15 +249,15 @@ describe('PanelPlugin', () => {
         expect(panel.fieldConfigRegistry.list()).toHaveLength(2);
       });
 
-      test('selected standard config', () => {
+      test('disabling standard config properties', () => {
         const panel = new PanelPlugin(() => {
           return <div>Panel</div>;
         });
 
         panel.useFieldConfig({
-          standardOptions: [FieldConfigProperty.Min, FieldConfigProperty.Max],
+          disableStandardOptions: [FieldConfigProperty.Min],
         });
-        expect(panel.fieldConfigRegistry.list()).toHaveLength(2);
+        expect(panel.fieldConfigRegistry.list()).toHaveLength(1);
       });
 
       describe('default values', () => {
@@ -228,10 +267,9 @@ describe('PanelPlugin', () => {
           });
 
           panel.useFieldConfig({
-            standardOptions: [FieldConfigProperty.Max, FieldConfigProperty.Min],
-            standardOptionsDefaults: {
-              [FieldConfigProperty.Max]: 20,
-              [FieldConfigProperty.Min]: 10,
+            standardOptions: {
+              [FieldConfigProperty.Max]: { defaultValue: 20 },
+              [FieldConfigProperty.Min]: { defaultValue: 10 },
             },
           });
 
@@ -247,17 +285,16 @@ describe('PanelPlugin', () => {
           });
         });
 
-        it('should ignore defaults that are not specified as available properties', () => {
+        it('should disable properties independently from the default values settings', () => {
           const panel = new PanelPlugin(() => {
             return <div>Panel</div>;
           });
 
           panel.useFieldConfig({
-            standardOptions: [FieldConfigProperty.Max],
-            standardOptionsDefaults: {
-              [FieldConfigProperty.Max]: 20,
-              [FieldConfigProperty.Min]: 10,
+            standardOptions: {
+              [FieldConfigProperty.Max]: { defaultValue: 20 },
             },
+            disableStandardOptions: [FieldConfigProperty.Min],
           });
 
           expect(panel.fieldConfigRegistry.list()).toHaveLength(1);

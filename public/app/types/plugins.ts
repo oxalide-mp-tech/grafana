@@ -1,6 +1,4 @@
-import { PluginMeta } from '@grafana/data';
-import { PanelPlugin } from '@grafana/data';
-import { TemplateSrv } from '@grafana/runtime';
+import { PanelPlugin, PluginError, PluginMeta } from '@grafana/data';
 
 export interface PluginDashboard {
   dashboardId: number;
@@ -16,6 +14,7 @@ export interface PluginDashboard {
   revision: number;
   slug: string;
   title: string;
+  uid: string;
 }
 
 export interface PanelPluginsIndex {
@@ -24,16 +23,10 @@ export interface PanelPluginsIndex {
 
 export interface PluginsState {
   plugins: PluginMeta[];
+  errors: PluginError[];
   searchQuery: string;
   hasFetched: boolean;
   dashboards: PluginDashboard[];
   isLoadingPluginDashboards: boolean;
   panels: PanelPluginsIndex;
-}
-
-export interface VariableQueryProps {
-  query: any;
-  onChange: (query: any, definition: string) => void;
-  datasource: any;
-  templateSrv: TemplateSrv;
 }

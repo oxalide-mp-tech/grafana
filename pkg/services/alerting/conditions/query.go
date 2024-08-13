@@ -1,19 +1,22 @@
 package conditions
 
 import (
+	gocontext "context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	gocontext "context"
+	"github.com/grafana/grafana-plugin-sdk-go/data"
 
-	"github.com/grafana/grafana/pkg/bus"
 	"github.com/grafana/grafana/pkg/components/null"
 	"github.com/grafana/grafana/pkg/components/simplejson"
-	"github.com/grafana/grafana/pkg/models"
 	"github.com/grafana/grafana/pkg/services/alerting"
-	"github.com/grafana/grafana/pkg/tsdb"
-	"github.com/grafana/grafana/pkg/util/errutil"
+	"github.com/grafana/grafana/pkg/services/datasources"
+	ngalertmodels "github.com/grafana/grafana/pkg/services/ngalert/models"
+	"github.com/grafana/grafana/pkg/tsdb/legacydata"
+	"github.com/grafana/grafana/pkg/tsdb/legacydata/interval"
+	"github.com/grafana/grafana/pkg/tsdb/prometheus"
 )
 
 func init() {
@@ -25,12 +28,11 @@ func init() {
 // QueryCondition is responsible for issue and query, reduce the
 // timeseries into single values and evaluate if they are firing or not.
 type QueryCondition struct {
-	Index         int
-	Query         AlertQuery
-	Reducer       *queryReducer
-	Evaluator     AlertEvaluator
-	Operator      string
-	HandleRequest tsdb.HandleRequestFunc
+	Index     int
+	Query     AlertQuery
+	Reducer   *queryReducer
+	Evaluator AlertEvaluator
+	Operator  string
 }
 
 // AlertQuery contains information about what datasource a query
@@ -43,17 +45,21 @@ type AlertQuery struct {
 }
 
 // Eval evaluates the `QueryCondition`.
-func (c *QueryCondition) Eval(context *alerting.EvalContext) (*alerting.ConditionResult, error) {
-	timeRange := tsdb.NewTimeRange(c.Query.From, c.Query.To)
+func (c *QueryCondition) Eval(context *alerting.EvalContext, requestHandler legacydata.RequestHandler) (*alerting.ConditionResult, error) {
+	timeRange := legacydata.NewDataTimeRange(c.Query.From, c.Query.To)
 
-	seriesList, err := c.executeQuery(context, timeRange)
+	seriesList, err := c.executeQuery(context, timeRange, requestHandler)
 	if err != nil {
 		return nil, err
 	}
 
 	emptySeriesCount := 0
 	evalMatchCount := 0
+
+	// matches represents all the series that violate the alert condition
 	var matches []*alerting.EvalMatch
+	// allMatches capture all evaluation matches irregardless on whether the condition is met or not
+	allMatches := make([]*alerting.EvalMatch, 0, len(seriesList))
 
 	for _, series := range seriesList {
 		reducedValue := c.Reducer.Reduce(series)
@@ -69,14 +75,17 @@ func (c *QueryCondition) Eval(context *alerting.EvalContext) (*alerting.Conditio
 			})
 		}
 
+		em := alerting.EvalMatch{
+			Metric: series.Name,
+			Value:  reducedValue,
+			Tags:   series.Tags,
+		}
+
+		allMatches = append(allMatches, &em)
+
 		if evalMatch {
 			evalMatchCount++
-
-			matches = append(matches, &alerting.EvalMatch{
-				Metric: series.Name,
-				Value:  reducedValue,
-				Tags:   series.Tags,
-			})
+			matches = append(matches, &em)
 		}
 	}
 
@@ -102,21 +111,56 @@ func (c *QueryCondition) Eval(context *alerting.EvalContext) (*alerting.Conditio
 		NoDataFound: emptySeriesCount == len(seriesList),
 		Operator:    c.Operator,
 		EvalMatches: matches,
+		AllMatches:  allMatches,
 	}, nil
 }
 
-func (c *QueryCondition) executeQuery(context *alerting.EvalContext, timeRange *tsdb.TimeRange) (tsdb.TimeSeriesSlice, error) {
-	getDsInfo := &models.GetDataSourceByIdQuery{
-		Id:    c.Query.DatasourceID,
-		OrgId: context.Rule.OrgID,
+func calculateInterval(timeRange legacydata.DataTimeRange, model *simplejson.Json, dsInfo *datasources.DataSource) (time.Duration, error) {
+	// if there is no min-interval specified in the datasource or in the dashboard-panel,
+	// the value of 1ms is used (this is how it is done in the dashboard-interval-calculation too,
+	// see https://github.com/grafana/grafana/blob/9a0040c0aeaae8357c650cec2ee644a571dddf3d/packages/grafana-data/src/datetime/rangeutil.ts#L264)
+	defaultMinInterval := time.Millisecond * 1
+
+	// interval.GetIntervalFrom has two problems (but they do not affect us here):
+	// - it returns the min-interval, so it should be called interval.GetMinIntervalFrom
+	// - it falls back to model.intervalMs. it should not, because that one is the real final
+	//   interval-value calculated by the browser. but, in this specific case (old-alert),
+	//   that value is not set, so the fallback never happens.
+	minInterval, err := interval.GetIntervalFrom(dsInfo, model, defaultMinInterval)
+
+	if err != nil {
+		return time.Duration(0), err
 	}
 
-	if err := bus.Dispatch(getDsInfo); err != nil {
-		return nil, fmt.Errorf("Could not find datasource %v", err)
+	calc := interval.NewCalculator()
+
+	interval := calc.Calculate(timeRange, minInterval)
+
+	return interval.Value, nil
+}
+
+func (c *QueryCondition) executeQuery(context *alerting.EvalContext, timeRange legacydata.DataTimeRange,
+	requestHandler legacydata.RequestHandler) (legacydata.DataTimeSeriesSlice, error) {
+	getDsInfo := &datasources.GetDataSourceQuery{
+		ID:    c.Query.DatasourceID,
+		OrgID: context.Rule.OrgID,
 	}
 
-	req := c.getRequestForAlertRule(getDsInfo.Result, timeRange, context.IsDebug)
-	result := make(tsdb.TimeSeriesSlice, 0)
+	dataSource, err := context.GetDataSource(context.Ctx, getDsInfo)
+	if err != nil {
+		return nil, fmt.Errorf("could not find datasource: %w", err)
+	}
+
+	err = context.RequestValidator.Validate(dataSource.URL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("access denied: %w", err)
+	}
+
+	req, err := c.getRequestForAlertRule(dataSource, timeRange, context.IsDebug)
+	if err != nil {
+		return nil, fmt.Errorf("interval calculation failed: %w", err)
+	}
+	result := make(legacydata.DataTimeSeriesSlice, 0)
 
 	if context.IsDebug {
 		data := simplejson.New()
@@ -130,20 +174,20 @@ func (c *QueryCondition) executeQuery(context *alerting.EvalContext, timeRange *
 			Model         *simplejson.Json `json:"model"`
 			Datasource    *simplejson.Json `json:"datasource"`
 			MaxDataPoints int64            `json:"maxDataPoints"`
-			IntervalMs    int64            `json:"intervalMs"`
+			IntervalMS    int64            `json:"intervalMs"`
 		}
 
 		queries := []*queryDto{}
 		for _, q := range req.Queries {
 			queries = append(queries, &queryDto{
-				RefID: q.RefId,
+				RefID: q.RefID,
 				Model: q.Model,
-				Datasource: simplejson.NewFromAny(map[string]interface{}{
-					"id":   q.DataSource.Id,
+				Datasource: simplejson.NewFromAny(map[string]any{
+					"id":   q.DataSource.ID,
 					"name": q.DataSource.Name,
 				}),
 				MaxDataPoints: q.MaxDataPoints,
-				IntervalMs:    q.IntervalMs,
+				IntervalMS:    q.IntervalMS,
 			})
 		}
 
@@ -155,33 +199,30 @@ func (c *QueryCondition) executeQuery(context *alerting.EvalContext, timeRange *
 		})
 	}
 
-	resp, err := c.HandleRequest(context.Ctx, getDsInfo.Result, req)
+	resp, err := requestHandler.HandleRequest(context.Ctx, dataSource, req)
 	if err != nil {
-		if err == gocontext.DeadlineExceeded {
-			return nil, fmt.Errorf("Alert execution exceeded the timeout")
-		}
-
-		return nil, fmt.Errorf("tsdb.HandleRequest() error %v", err)
+		return nil, toCustomError(err)
 	}
 
 	for _, v := range resp.Results {
 		if v.Error != nil {
-			return nil, fmt.Errorf("tsdb.HandleRequest() response error %v", v)
+			return nil, fmt.Errorf("request handler response error %v", v)
 		}
 
 		// If there are dataframes but no series on the result
 		useDataframes := v.Dataframes != nil && (v.Series == nil || len(v.Series) == 0)
 
-		if useDataframes { // convert the dataframes to tsdb.TimeSeries
+		if useDataframes { // convert the dataframes to plugins.DataTimeSeries
 			frames, err := v.Dataframes.Decoded()
 			if err != nil {
-				return nil, errutil.Wrap("tsdb.HandleRequest() failed to unmarshal arrow dataframes from bytes", err)
+				return nil, fmt.Errorf("%v: %w", "request handler failed to unmarshal arrow dataframes from bytes", err)
 			}
 
 			for _, frame := range frames {
-				ss, err := tsdb.FrameToSeriesSlice(frame)
+				ss, err := FrameToSeriesSlice(frame)
 				if err != nil {
-					return nil, errutil.Wrapf(err, `tsdb.HandleRequest() failed to convert dataframe "%v" to tsdb.TimeSeriesSlice`, frame.Name)
+					return nil, fmt.Errorf(
+						`request handler failed to convert dataframe "%v" to plugins.DataTimeSeriesSlice: %w`, frame.Name, err)
 				}
 				result = append(result, ss...)
 			}
@@ -189,7 +230,7 @@ func (c *QueryCondition) executeQuery(context *alerting.EvalContext, timeRange *
 			result = append(result, v.Series...)
 		}
 
-		queryResultData := map[string]interface{}{}
+		queryResultData := map[string]any{}
 
 		if context.IsTestRun {
 			queryResultData["series"] = result
@@ -213,31 +254,40 @@ func (c *QueryCondition) executeQuery(context *alerting.EvalContext, timeRange *
 	return result, nil
 }
 
-func (c *QueryCondition) getRequestForAlertRule(datasource *models.DataSource, timeRange *tsdb.TimeRange, debug bool) *tsdb.TsdbQuery {
+func (c *QueryCondition) getRequestForAlertRule(datasource *datasources.DataSource, timeRange legacydata.DataTimeRange,
+	debug bool) (legacydata.DataQuery, error) {
 	queryModel := c.Query.Model
-	req := &tsdb.TsdbQuery{
-		TimeRange: timeRange,
-		Queries: []*tsdb.Query{
+
+	calculatedInterval, err := calculateInterval(timeRange, queryModel, datasource)
+	if err != nil {
+		return legacydata.DataQuery{}, err
+	}
+
+	req := legacydata.DataQuery{
+		TimeRange: &timeRange,
+		Queries: []legacydata.DataSubQuery{
 			{
-				RefId:      "A",
-				Model:      queryModel,
-				DataSource: datasource,
-				QueryType:  queryModel.Get("queryType").MustString(""),
+				RefID:         "A",
+				Model:         queryModel,
+				DataSource:    datasource,
+				QueryType:     queryModel.Get("queryType").MustString(""),
+				MaxDataPoints: interval.DefaultRes,
+				IntervalMS:    calculatedInterval.Milliseconds(),
 			},
 		},
 		Headers: map[string]string{
-			"FromAlert": "true",
+			ngalertmodels.FromAlertHeaderName: "true",
+			ngalertmodels.CacheSkipHeaderName: "true",
 		},
 		Debug: debug,
 	}
 
-	return req
+	return req, nil
 }
 
 func newQueryCondition(model *simplejson.Json, index int) (*QueryCondition, error) {
 	condition := QueryCondition{}
 	condition.Index = index
-	condition.HandleRequest = tsdb.HandleRequest
 
 	queryJSON := model.Get("query")
 
@@ -293,4 +343,88 @@ func validateToValue(to string) error {
 
 	_, err := time.ParseDuration(to)
 	return err
+}
+
+// FrameToSeriesSlice converts a frame that is a valid time series as per data.TimeSeriesSchema()
+// to a DataTimeSeriesSlice.
+func FrameToSeriesSlice(frame *data.Frame) (legacydata.DataTimeSeriesSlice, error) {
+	tsSchema := frame.TimeSeriesSchema()
+	if tsSchema.Type == data.TimeSeriesTypeNot {
+		// If no fields, or only a time field, create an empty plugins.DataTimeSeriesSlice with a single
+		// time series in order to trigger "no data" in alerting.
+		if frame.Rows() == 0 || (len(frame.Fields) == 1 && frame.Fields[0].Type().Time()) {
+			return legacydata.DataTimeSeriesSlice{{
+				Name:   frame.Name,
+				Points: make(legacydata.DataTimeSeriesPoints, 0),
+			}}, nil
+		}
+		return nil, fmt.Errorf("input frame is not recognized as a time series")
+	}
+	seriesCount := len(tsSchema.ValueIndices)
+	seriesSlice := make(legacydata.DataTimeSeriesSlice, 0, seriesCount)
+	timeField := frame.Fields[tsSchema.TimeIndex]
+	timeNullFloatSlice := make([]null.Float, timeField.Len())
+
+	for i := 0; i < timeField.Len(); i++ { // built slice of time as epoch ms in null floats
+		tStamp, err := timeField.FloatAt(i)
+		if err != nil {
+			return nil, err
+		}
+		timeNullFloatSlice[i] = null.FloatFrom(tStamp)
+	}
+
+	for _, fieldIdx := range tsSchema.ValueIndices { // create a TimeSeries for each value Field
+		field := frame.Fields[fieldIdx]
+		ts := legacydata.DataTimeSeries{
+			Points: make(legacydata.DataTimeSeriesPoints, field.Len()),
+		}
+
+		if len(field.Labels) > 0 {
+			ts.Tags = field.Labels.Copy()
+		}
+
+		switch {
+		case field.Config != nil && field.Config.DisplayName != "":
+			ts.Name = field.Config.DisplayName
+		case field.Config != nil && field.Config.DisplayNameFromDS != "":
+			ts.Name = field.Config.DisplayNameFromDS
+		case len(field.Labels) > 0:
+			// Tags are appended to the name so they are eventually included in EvalMatch's Metric property
+			// for display in notifications.
+			ts.Name = fmt.Sprintf("%v {%v}", field.Name, field.Labels.String())
+		default:
+			ts.Name = field.Name
+		}
+
+		for rowIdx := 0; rowIdx < field.Len(); rowIdx++ { // for each value in the field, make a TimePoint
+			val, err := field.FloatAt(rowIdx)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"failed to convert frame to DataTimeSeriesSlice, can not convert value %v to float: %w", field.At(rowIdx), err)
+			}
+			ts.Points[rowIdx] = legacydata.DataTimePoint{
+				null.FloatFrom(val),
+				timeNullFloatSlice[rowIdx],
+			}
+		}
+
+		seriesSlice = append(seriesSlice, ts)
+	}
+
+	return seriesSlice, nil
+}
+
+func toCustomError(err error) error {
+	// is context timeout
+	if errors.Is(err, gocontext.DeadlineExceeded) {
+		return fmt.Errorf("alert execution exceeded the timeout")
+	}
+
+	// is Prometheus error
+	if prometheus.IsAPIError(err) {
+		return prometheus.ConvertAPIError(err)
+	}
+
+	// generic fallback
+	return fmt.Errorf("request handler error: %w", err)
 }

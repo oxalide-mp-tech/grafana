@@ -1,144 +1,149 @@
-import React, { MouseEvent, PureComponent } from 'react';
-import { Icon } from '@grafana/ui';
-import { selectors } from '@grafana/e2e-selectors';
+import React, { PureComponent } from 'react';
+import { connect, ConnectedProps } from 'react-redux';
+import { bindActionCreators } from 'redux';
 
-import { NEW_VARIABLE_ID, toVariableIdentifier, toVariablePayload, VariableIdentifier } from '../state/types';
-import { StoreState } from '../../../types';
-import { VariableEditorList } from './VariableEditorList';
-import { VariableEditorEditor } from './VariableEditorEditor';
-import { MapDispatchToProps, MapStateToProps } from 'react-redux';
-import { connectWithStore } from '../../../core/utils/connectWithReduxStore';
-import { getEditorVariables } from '../state/selectors';
-import { VariableModel } from '../types';
-import { switchToEditMode, switchToListMode, switchToNewMode } from './actions';
+import { config, locationService } from '@grafana/runtime';
+import { Page } from 'app/core/components/Page/Page';
+import { SettingsPageProps } from 'app/features/dashboard/components/DashboardSettings/types';
+
+import { StoreState, ThunkDispatch } from '../../../types';
+import { VariablesUnknownTable } from '../inspect/VariablesUnknownTable';
+import { toKeyedAction } from '../state/keyedVariablesReducer';
+import { getEditorVariables, getVariablesState } from '../state/selectors';
 import { changeVariableOrder, duplicateVariable, removeVariable } from '../state/sharedReducer';
+import { KeyedVariableIdentifier } from '../state/types';
+import { toKeyedVariableIdentifier, toVariablePayload } from '../utils';
 
-interface OwnProps {}
+import { ConfirmDeleteModal } from './ConfirmDeleteModal';
+import { VariableEditorEditor } from './VariableEditorEditor';
+import { VariableEditorList } from './VariableEditorList';
+import { createNewVariable, initListMode } from './actions';
 
-interface ConnectedProps {
-  idInEditor: string | null;
-  variables: VariableModel[];
+const mapStateToProps = (state: StoreState, ownProps: OwnProps) => {
+  const { uid } = ownProps.dashboard;
+  const templatingState = getVariablesState(uid, state);
+  return {
+    variables: getEditorVariables(uid, state),
+    idInEditor: templatingState.editor.id,
+    usagesNetwork: templatingState.inspect.usagesNetwork,
+    usages: templatingState.inspect.usages,
+  };
+};
+
+const mapDispatchToProps = (dispatch: ThunkDispatch) => {
+  return {
+    ...bindActionCreators({ createNewVariable, initListMode }, dispatch),
+    changeVariableOrder: (identifier: KeyedVariableIdentifier, fromIndex: number, toIndex: number) =>
+      dispatch(
+        toKeyedAction(
+          identifier.rootStateKey,
+          changeVariableOrder(toVariablePayload(identifier, { fromIndex, toIndex }))
+        )
+      ),
+    duplicateVariable: (identifier: KeyedVariableIdentifier) =>
+      dispatch(
+        toKeyedAction(
+          identifier.rootStateKey,
+          duplicateVariable(toVariablePayload(identifier, { newId: undefined as unknown as string }))
+        )
+      ),
+    removeVariable: (identifier: KeyedVariableIdentifier) => {
+      dispatch(
+        toKeyedAction(identifier.rootStateKey, removeVariable(toVariablePayload(identifier, { reIndex: true })))
+      );
+    },
+  };
+};
+
+interface OwnProps extends SettingsPageProps {}
+
+const connector = connect(mapStateToProps, mapDispatchToProps);
+
+type Props = OwnProps & ConnectedProps<typeof connector>;
+
+interface State {
+  variableId?: KeyedVariableIdentifier;
 }
 
-interface DispatchProps {
-  changeVariableOrder: typeof changeVariableOrder;
-  duplicateVariable: typeof duplicateVariable;
-  removeVariable: typeof removeVariable;
-  switchToNewMode: typeof switchToNewMode;
-  switchToEditMode: typeof switchToEditMode;
-  switchToListMode: typeof switchToListMode;
-}
+class VariableEditorContainerUnconnected extends PureComponent<Props, State> {
+  state: State = {
+    variableId: undefined,
+  };
 
-type Props = OwnProps & ConnectedProps & DispatchProps;
-
-class VariableEditorContainerUnconnected extends PureComponent<Props> {
-  componentDidMount(): void {
-    this.props.switchToListMode();
+  componentDidMount() {
+    this.props.initListMode(this.props.dashboard.uid);
   }
 
-  onChangeToListMode = (event: MouseEvent<HTMLAnchorElement>) => {
-    event.preventDefault();
-    this.props.switchToListMode();
+  onEditVariable = (identifier: KeyedVariableIdentifier) => {
+    const index = this.props.variables.findIndex((x) => x.id === identifier.id);
+    locationService.partial({ editIndex: index });
   };
 
-  onEditVariable = (identifier: VariableIdentifier) => {
-    this.props.switchToEditMode(identifier);
+  onNewVariable = () => {
+    this.props.createNewVariable(this.props.dashboard.uid);
   };
 
-  onNewVariable = (event: MouseEvent<HTMLAnchorElement>) => {
-    event.preventDefault();
-    this.props.switchToNewMode();
+  onChangeVariableOrder = (identifier: KeyedVariableIdentifier, fromIndex: number, toIndex: number) => {
+    this.props.changeVariableOrder(identifier, fromIndex, toIndex);
   };
 
-  onChangeVariableOrder = (identifier: VariableIdentifier, fromIndex: number, toIndex: number) => {
-    this.props.changeVariableOrder(toVariablePayload(identifier, { fromIndex, toIndex }));
+  onDuplicateVariable = (identifier: KeyedVariableIdentifier) => {
+    this.props.duplicateVariable(identifier);
   };
 
-  onDuplicateVariable = (identifier: VariableIdentifier) => {
-    this.props.duplicateVariable(toVariablePayload(identifier, { newId: (undefined as unknown) as string }));
+  onModalOpen = (identifier: KeyedVariableIdentifier) => {
+    this.setState({ variableId: identifier });
   };
 
-  onRemoveVariable = (identifier: VariableIdentifier) => {
-    this.props.removeVariable(toVariablePayload(identifier, { reIndex: true }));
+  onModalClose = () => {
+    this.setState({ variableId: undefined });
+  };
+
+  onRemoveVariable = () => {
+    this.props.removeVariable(this.state.variableId!);
+    this.onModalClose();
   };
 
   render() {
-    const variableToEdit = this.props.variables.find(s => s.id === this.props.idInEditor) ?? null;
+    const { editIndex, variables, sectionNav } = this.props;
+    const variableToEdit = editIndex != null ? variables[editIndex] : undefined;
+    const node = sectionNav.node;
+    const parentItem =
+      config.featureToggles.dockedMegaMenu && node.parentItem
+        ? {
+            ...node.parentItem,
+            url: node.url,
+          }
+        : undefined;
+    const subPageNav = variableToEdit ? { text: variableToEdit.name, parentItem } : parentItem;
+
     return (
-      <div>
-        <div className="page-action-bar">
-          <h3 className="dashboard-settings__header">
-            <a
-              onClick={this.onChangeToListMode}
-              aria-label={selectors.pages.Dashboard.Settings.Variables.Edit.General.headerLink}
-            >
-              Variables
-            </a>
-            {this.props.idInEditor === NEW_VARIABLE_ID && (
-              <span>
-                <Icon
-                  name="angle-right"
-                  aria-label={selectors.pages.Dashboard.Settings.Variables.Edit.General.modeLabelNew}
-                />
-                New
-              </span>
-            )}
-            {this.props.idInEditor && this.props.idInEditor !== NEW_VARIABLE_ID && (
-              <span>
-                <Icon
-                  name="angle-right"
-                  aria-label={selectors.pages.Dashboard.Settings.Variables.Edit.General.modeLabelEdit}
-                />
-                Edit
-              </span>
-            )}
-          </h3>
-
-          <div className="page-action-bar__spacer" />
-          {this.props.variables.length > 0 && variableToEdit === null && (
-            <a
-              type="button"
-              className="btn btn-primary"
-              onClick={this.onNewVariable}
-              aria-label={selectors.pages.Dashboard.Settings.Variables.List.newButton}
-            >
-              New
-            </a>
-          )}
-        </div>
-
+      <Page navModel={this.props.sectionNav} pageNav={subPageNav}>
         {!variableToEdit && (
           <VariableEditorList
             variables={this.props.variables}
-            onAddClick={this.onNewVariable}
-            onEditClick={this.onEditVariable}
-            onChangeVariableOrder={this.onChangeVariableOrder}
-            onDuplicateVariable={this.onDuplicateVariable}
-            onRemoveVariable={this.onRemoveVariable}
+            onAdd={this.onNewVariable}
+            onEdit={this.onEditVariable}
+            onChangeOrder={this.onChangeVariableOrder}
+            onDuplicate={this.onDuplicateVariable}
+            onDelete={this.onModalOpen}
+            usages={this.props.usages}
+            usagesNetwork={this.props.usagesNetwork}
           />
         )}
-        {variableToEdit && <VariableEditorEditor identifier={toVariableIdentifier(variableToEdit)} />}
-      </div>
+        {!variableToEdit && this.props.variables.length > 0 && (
+          <VariablesUnknownTable variables={this.props.variables} dashboard={this.props.dashboard} />
+        )}
+        {variableToEdit && <VariableEditorEditor identifier={toKeyedVariableIdentifier(variableToEdit)} />}
+        <ConfirmDeleteModal
+          isOpen={this.state.variableId !== undefined}
+          varName={this.state.variableId?.id ?? ''}
+          onConfirm={this.onRemoveVariable}
+          onDismiss={this.onModalClose}
+        />
+      </Page>
     );
   }
 }
 
-const mapStateToProps: MapStateToProps<ConnectedProps, OwnProps, StoreState> = state => ({
-  variables: getEditorVariables(state),
-  idInEditor: state.templating.editor.id,
-});
-
-const mapDispatchToProps: MapDispatchToProps<DispatchProps, OwnProps> = {
-  changeVariableOrder,
-  duplicateVariable,
-  removeVariable,
-  switchToNewMode,
-  switchToEditMode,
-  switchToListMode,
-};
-
-export const VariableEditorContainer = connectWithStore(
-  VariableEditorContainerUnconnected,
-  mapStateToProps,
-  mapDispatchToProps
-);
+export const VariableEditorContainer = connector(VariableEditorContainerUnconnected);

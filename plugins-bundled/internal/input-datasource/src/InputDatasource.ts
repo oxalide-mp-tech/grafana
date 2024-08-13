@@ -2,6 +2,7 @@
 import {
   DataQueryRequest,
   DataQueryResponse,
+  TestDataSourceResponse,
   DataSourceApi,
   DataSourceInstanceSettings,
   MetricFindValue,
@@ -19,7 +20,7 @@ export class InputDatasource extends DataSourceApi<InputQuery, InputOptions> {
     super(instanceSettings);
 
     if (instanceSettings.jsonData.data) {
-      this.data = instanceSettings.jsonData.data.map(v => toDataFrame(v));
+      this.data = instanceSettings.jsonData.data.map((v) => toDataFrame(v));
     }
   }
 
@@ -56,7 +57,7 @@ export class InputDatasource extends DataSourceApi<InputQuery, InputOptions> {
       }
       let data = this.data;
       if (query.data) {
-        data = query.data.map(v => toDataFrame(v));
+        data = query.data.map((v) => toDataFrame(v));
       }
       for (let i = 0; i < data.length; i++) {
         results.push({
@@ -68,7 +69,7 @@ export class InputDatasource extends DataSourceApi<InputQuery, InputOptions> {
     return Promise.resolve({ data: results });
   }
 
-  testDatasource() {
+  testDatasource(): Promise<TestDataSourceResponse> {
     return new Promise((resolve, reject) => {
       let rowCount = 0;
       let info = `${this.data.length} Series:`;
@@ -96,8 +97,8 @@ function getLength(data?: DataFrameDTO | DataFrame) {
   if (!data || !data.fields || !data.fields.length) {
     return 0;
   }
-  if (data.hasOwnProperty('length')) {
-    return (data as DataFrame).length;
+  if ('length' in data) {
+    return data.length;
   }
   return data.fields[0].values!.length;
 }

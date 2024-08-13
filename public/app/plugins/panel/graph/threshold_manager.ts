@@ -1,16 +1,17 @@
 import 'vendor/flot/jquery.flot';
 import $ from 'jquery';
-import _ from 'lodash';
-import { getColorFromHexRgbOrName } from '@grafana/data';
+import { isNumber } from 'lodash';
+
+import { PanelCtrl } from 'app/angular/panel/panel_ctrl';
+import { config } from 'app/core/config';
 import { CoreEvents } from 'app/types';
-import { PanelCtrl } from 'app/features/panel/panel_ctrl';
 
 export class ThresholdManager {
   plot: any;
   placeholder: any;
   height: any;
   thresholds: any;
-  needsCleanup: boolean;
+  needsCleanup = false;
   hasSecondYAxis: any;
 
   constructor(private panelCtrl: PanelCtrl) {}
@@ -86,12 +87,17 @@ export class ThresholdManager {
 
   renderHandle(handleIndex: number, defaultHandleTopPos: number) {
     const model = this.thresholds[handleIndex];
+    // alerting defines
+    if (!model.visible && (this.panelCtrl as any).alert) {
+      return;
+    }
+
     const value = model.value;
     let valueStr = value;
     let handleTopPos = 0;
 
     // handle no value
-    if (!_.isNumber(value)) {
+    if (!isNumber(value)) {
       valueStr = '';
       handleTopPos = defaultHandleTopPos;
     } else {
@@ -166,7 +172,7 @@ export class ThresholdManager {
 
     for (i = 0; i < panel.thresholds.length; i++) {
       threshold = panel.thresholds[i];
-      if (!_.isNumber(threshold.value)) {
+      if (!isNumber(threshold.value)) {
         continue;
       }
 
@@ -228,12 +234,12 @@ export class ThresholdManager {
         if (threshold.yaxis === 'right' && this.hasSecondYAxis) {
           options.grid.markings.push({
             y2axis: { from: threshold.value, to: limit },
-            color: getColorFromHexRgbOrName(fillColor),
+            color: config.theme2.visualization.getColorByName(fillColor),
           });
         } else {
           options.grid.markings.push({
             yaxis: { from: threshold.value, to: limit },
-            color: getColorFromHexRgbOrName(fillColor),
+            color: config.theme2.visualization.getColorByName(fillColor),
           });
         }
       }
@@ -241,12 +247,12 @@ export class ThresholdManager {
         if (threshold.yaxis === 'right' && this.hasSecondYAxis) {
           options.grid.markings.push({
             y2axis: { from: threshold.value, to: threshold.value },
-            color: getColorFromHexRgbOrName(lineColor),
+            color: config.theme2.visualization.getColorByName(lineColor),
           });
         } else {
           options.grid.markings.push({
             yaxis: { from: threshold.value, to: threshold.value },
-            color: getColorFromHexRgbOrName(lineColor),
+            color: config.theme2.visualization.getColorByName(lineColor),
           });
         }
       }

@@ -2,116 +2,102 @@ package api
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"testing"
 	"time"
 
-	"github.com/grafana/grafana/pkg/bus"
-	"github.com/grafana/grafana/pkg/models"
-	"github.com/grafana/grafana/pkg/services/auth"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
-	. "github.com/smartystreets/goconvey/convey"
+	"github.com/grafana/grafana/pkg/api/response"
+	"github.com/grafana/grafana/pkg/api/routing"
+	"github.com/grafana/grafana/pkg/infra/log"
+	"github.com/grafana/grafana/pkg/services/auth"
+	"github.com/grafana/grafana/pkg/services/auth/authtest"
+	contextmodel "github.com/grafana/grafana/pkg/services/contexthandler/model"
+	"github.com/grafana/grafana/pkg/services/featuremgmt"
+	"github.com/grafana/grafana/pkg/services/org"
+	"github.com/grafana/grafana/pkg/services/user"
+	"github.com/grafana/grafana/pkg/services/user/usertest"
+	"github.com/grafana/grafana/pkg/setting"
 )
 
-func TestUserTokenApiEndpoint(t *testing.T) {
-	Convey("When current user attempts to revoke an auth token for a non-existing user", t, func() {
-		userId := int64(0)
-		bus.AddHandler("test", func(cmd *models.GetUserByIdQuery) error {
-			userId = cmd.Id
-			return models.ErrUserNotFound
-		})
-
-		cmd := models.RevokeAuthTokenCmd{AuthTokenId: 2}
-
-		revokeUserAuthTokenScenario("Should return not found when calling POST on", "/api/user/revoke-auth-token", "/api/user/revoke-auth-token", cmd, 200, func(sc *scenarioContext) {
-			sc.fakeReqWithParams("POST", sc.url, map[string]string{}).exec()
-			So(sc.resp.Code, ShouldEqual, 404)
-			So(userId, ShouldEqual, 200)
-		})
+func TestUserTokenAPIEndpoint(t *testing.T) {
+	userMock := usertest.NewUserServiceFake()
+	t.Run("When current user attempts to revoke an auth token for a non-existing user", func(t *testing.T) {
+		cmd := auth.RevokeAuthTokenCmd{AuthTokenId: 2}
+		userMock.ExpectedError = user.ErrUserNotFound
+		revokeUserAuthTokenScenario(t, "Should return not found when calling POST on", "/api/user/revoke-auth-token",
+			"/api/user/revoke-auth-token", cmd, 200, func(sc *scenarioContext) {
+				sc.fakeReqWithParams("POST", sc.url, map[string]string{}).exec()
+				assert.Equal(t, 404, sc.resp.Code)
+			}, userMock)
 	})
 
-	Convey("When current user gets auth tokens for a non-existing user", t, func() {
-		userId := int64(0)
-		bus.AddHandler("test", func(cmd *models.GetUserByIdQuery) error {
-			userId = cmd.Id
-			return models.ErrUserNotFound
-		})
-
-		getUserAuthTokensScenario("Should return not found when calling GET on", "/api/user/auth-tokens", "/api/user/auth-tokens", 200, func(sc *scenarioContext) {
+	t.Run("When current user gets auth tokens for a non-existing user", func(t *testing.T) {
+		mockUser := &usertest.FakeUserService{
+			ExpectedUser:  &user.User{ID: 200},
+			ExpectedError: user.ErrUserNotFound,
+		}
+		getUserAuthTokensScenario(t, "Should return not found when calling GET on", "/api/user/auth-tokens", "/api/user/auth-tokens", 200, func(sc *scenarioContext) {
 			sc.fakeReqWithParams("GET", sc.url, map[string]string{}).exec()
-			So(sc.resp.Code, ShouldEqual, 404)
-			So(userId, ShouldEqual, 200)
-		})
+			assert.Equal(t, 404, sc.resp.Code)
+		}, mockUser)
 	})
 
-	Convey("When logout an existing user from all devices", t, func() {
-		bus.AddHandler("test", func(cmd *models.GetUserByIdQuery) error {
-			cmd.Result = &models.User{Id: 200}
-			return nil
-		})
-
-		logoutUserFromAllDevicesInternalScenario("Should be successful", 1, func(sc *scenarioContext) {
+	t.Run("When logging out an existing user from all devices", func(t *testing.T) {
+		userMock := &usertest.FakeUserService{
+			ExpectedUser: &user.User{ID: 200},
+		}
+		logoutUserFromAllDevicesInternalScenario(t, "Should be successful", 1, func(sc *scenarioContext) {
 			sc.fakeReqWithParams("POST", sc.url, map[string]string{}).exec()
-			So(sc.resp.Code, ShouldEqual, 200)
-		})
+			assert.Equal(t, 200, sc.resp.Code)
+		}, userMock)
 	})
 
-	Convey("When logout a non-existing user from all devices", t, func() {
-		bus.AddHandler("test", func(cmd *models.GetUserByIdQuery) error {
-			return models.ErrUserNotFound
-		})
-
-		logoutUserFromAllDevicesInternalScenario("Should return not found", TestUserID, func(sc *scenarioContext) {
+	t.Run("When logout a non-existing user from all devices", func(t *testing.T) {
+		logoutUserFromAllDevicesInternalScenario(t, "Should return not found", testUserID, func(sc *scenarioContext) {
+			userMock.ExpectedError = user.ErrUserNotFound
 			sc.fakeReqWithParams("POST", sc.url, map[string]string{}).exec()
-			So(sc.resp.Code, ShouldEqual, 404)
-		})
+			assert.Equal(t, 404, sc.resp.Code)
+		}, userMock)
 	})
 
-	Convey("When revoke an auth token for a user", t, func() {
-		bus.AddHandler("test", func(cmd *models.GetUserByIdQuery) error {
-			cmd.Result = &models.User{Id: 200}
-			return nil
-		})
+	t.Run("When revoke an auth token for a user", func(t *testing.T) {
+		cmd := auth.RevokeAuthTokenCmd{AuthTokenId: 2}
+		token := &auth.UserToken{Id: 1}
+		mockUser := &usertest.FakeUserService{
+			ExpectedUser: &user.User{ID: 200},
+		}
 
-		cmd := models.RevokeAuthTokenCmd{AuthTokenId: 2}
-		token := &models.UserToken{Id: 1}
-
-		revokeUserAuthTokenInternalScenario("Should be successful", cmd, 200, token, func(sc *scenarioContext) {
-			sc.userAuthTokenService.GetUserTokenProvider = func(ctx context.Context, userId, userTokenId int64) (*models.UserToken, error) {
-				return &models.UserToken{Id: 2}, nil
+		revokeUserAuthTokenInternalScenario(t, "Should be successful", cmd, 200, token, func(sc *scenarioContext) {
+			sc.userAuthTokenService.GetUserTokenProvider = func(ctx context.Context, userId, userTokenId int64) (*auth.UserToken, error) {
+				return &auth.UserToken{Id: 2}, nil
 			}
 			sc.fakeReqWithParams("POST", sc.url, map[string]string{}).exec()
-			So(sc.resp.Code, ShouldEqual, 200)
-		})
+			assert.Equal(t, 200, sc.resp.Code)
+		}, mockUser)
 	})
 
-	Convey("When revoke the active auth token used by himself", t, func() {
-		bus.AddHandler("test", func(cmd *models.GetUserByIdQuery) error {
-			cmd.Result = &models.User{Id: TestUserID}
-			return nil
-		})
-
-		cmd := models.RevokeAuthTokenCmd{AuthTokenId: 2}
-		token := &models.UserToken{Id: 2}
-
-		revokeUserAuthTokenInternalScenario("Should not be successful", cmd, TestUserID, token, func(sc *scenarioContext) {
-			sc.userAuthTokenService.GetUserTokenProvider = func(ctx context.Context, userId, userTokenId int64) (*models.UserToken, error) {
+	t.Run("When revoke the active auth token used by himself", func(t *testing.T) {
+		cmd := auth.RevokeAuthTokenCmd{AuthTokenId: 2}
+		token := &auth.UserToken{Id: 2}
+		mockUser := usertest.NewUserServiceFake()
+		revokeUserAuthTokenInternalScenario(t, "Should not be successful", cmd, testUserID, token, func(sc *scenarioContext) {
+			sc.userAuthTokenService.GetUserTokenProvider = func(ctx context.Context, userId, userTokenId int64) (*auth.UserToken, error) {
 				return token, nil
 			}
 			sc.fakeReqWithParams("POST", sc.url, map[string]string{}).exec()
-			So(sc.resp.Code, ShouldEqual, 400)
-		})
+			assert.Equal(t, 400, sc.resp.Code)
+		}, mockUser)
 	})
 
-	Convey("When gets auth tokens for a user", t, func() {
-		bus.AddHandler("test", func(cmd *models.GetUserByIdQuery) error {
-			cmd.Result = &models.User{Id: TestUserID}
-			return nil
-		})
-
-		currentToken := &models.UserToken{Id: 1}
-
-		getUserAuthTokensInternalScenario("Should be successful", currentToken, func(sc *scenarioContext) {
-			tokens := []*models.UserToken{
+	t.Run("When gets auth tokens for a user", func(t *testing.T) {
+		currentToken := &auth.UserToken{Id: 1}
+		mockUser := usertest.NewUserServiceFake()
+		getUserAuthTokensInternalScenario(t, "Should be successful", currentToken, func(sc *scenarioContext) {
+			tokens := []*auth.UserToken{
 				{
 					Id:        1,
 					ClientIp:  "127.0.0.1",
@@ -127,64 +113,155 @@ func TestUserTokenApiEndpoint(t *testing.T) {
 					SeenAt:    0,
 				},
 			}
-			sc.userAuthTokenService.GetUserTokensProvider = func(ctx context.Context, userId int64) ([]*models.UserToken, error) {
+			sc.userAuthTokenService.GetUserTokensProvider = func(ctx context.Context, userId int64) ([]*auth.UserToken, error) {
 				return tokens, nil
 			}
 			sc.fakeReqWithParams("GET", sc.url, map[string]string{}).exec()
 
-			So(sc.resp.Code, ShouldEqual, 200)
+			assert.Equal(t, 200, sc.resp.Code)
 			result := sc.ToJSON()
-			So(result.MustArray(), ShouldHaveLength, 2)
+			assert.Len(t, result.MustArray(), 2)
 
 			resultOne := result.GetIndex(0)
-			So(resultOne.Get("id").MustInt64(), ShouldEqual, tokens[0].Id)
-			So(resultOne.Get("isActive").MustBool(), ShouldBeTrue)
-			So(resultOne.Get("clientIp").MustString(), ShouldEqual, "127.0.0.1")
-			So(resultOne.Get("createdAt").MustString(), ShouldEqual, time.Unix(tokens[0].CreatedAt, 0).Format(time.RFC3339))
-			So(resultOne.Get("seenAt").MustString(), ShouldEqual, time.Unix(tokens[0].SeenAt, 0).Format(time.RFC3339))
+			assert.Equal(t, tokens[0].Id, resultOne.Get("id").MustInt64())
+			assert.True(t, resultOne.Get("isActive").MustBool())
+			assert.Equal(t, "127.0.0.1", resultOne.Get("clientIp").MustString())
+			assert.Equal(t, time.Unix(tokens[0].CreatedAt, 0).Format(time.RFC3339), resultOne.Get("createdAt").MustString())
+			assert.Equal(t, time.Unix(tokens[0].SeenAt, 0).Format(time.RFC3339), resultOne.Get("seenAt").MustString())
 
-			So(resultOne.Get("device").MustString(), ShouldEqual, "Other")
-			So(resultOne.Get("browser").MustString(), ShouldEqual, "Chrome")
-			So(resultOne.Get("browserVersion").MustString(), ShouldEqual, "72.0")
-			So(resultOne.Get("os").MustString(), ShouldEqual, "Linux")
-			So(resultOne.Get("osVersion").MustString(), ShouldEqual, "")
+			assert.Equal(t, "Other", resultOne.Get("device").MustString())
+			assert.Equal(t, "Chrome", resultOne.Get("browser").MustString())
+			assert.Equal(t, "72.0", resultOne.Get("browserVersion").MustString())
+			assert.Equal(t, "Linux", resultOne.Get("os").MustString())
+			assert.Empty(t, resultOne.Get("osVersion").MustString())
 
 			resultTwo := result.GetIndex(1)
-			So(resultTwo.Get("id").MustInt64(), ShouldEqual, tokens[1].Id)
-			So(resultTwo.Get("isActive").MustBool(), ShouldBeFalse)
-			So(resultTwo.Get("clientIp").MustString(), ShouldEqual, "127.0.0.2")
-			So(resultTwo.Get("createdAt").MustString(), ShouldEqual, time.Unix(tokens[1].CreatedAt, 0).Format(time.RFC3339))
-			So(resultTwo.Get("seenAt").MustString(), ShouldEqual, time.Unix(tokens[1].CreatedAt, 0).Format(time.RFC3339))
+			assert.Equal(t, tokens[1].Id, resultTwo.Get("id").MustInt64())
+			assert.False(t, resultTwo.Get("isActive").MustBool())
+			assert.Equal(t, "127.0.0.2", resultTwo.Get("clientIp").MustString())
+			assert.Equal(t, time.Unix(tokens[1].CreatedAt, 0).Format(time.RFC3339), resultTwo.Get("createdAt").MustString())
+			assert.Equal(t, time.Unix(tokens[1].CreatedAt, 0).Format(time.RFC3339), resultTwo.Get("seenAt").MustString())
 
-			So(resultTwo.Get("device").MustString(), ShouldEqual, "iPhone")
-			So(resultTwo.Get("browser").MustString(), ShouldEqual, "Mobile Safari")
-			So(resultTwo.Get("browserVersion").MustString(), ShouldEqual, "11.0")
-			So(resultTwo.Get("os").MustString(), ShouldEqual, "iOS")
-			So(resultTwo.Get("osVersion").MustString(), ShouldEqual, "11.0")
-		})
+			assert.Equal(t, "iPhone", resultTwo.Get("device").MustString())
+			assert.Equal(t, "Mobile Safari", resultTwo.Get("browser").MustString())
+			assert.Equal(t, "11.0", resultTwo.Get("browserVersion").MustString())
+			assert.Equal(t, "iOS", resultTwo.Get("os").MustString())
+			assert.Equal(t, "11.0", resultTwo.Get("osVersion").MustString())
+		}, mockUser)
 	})
 }
 
-func revokeUserAuthTokenScenario(desc string, url string, routePattern string, cmd models.RevokeAuthTokenCmd, userId int64, fn scenarioFunc) {
-	Convey(desc+" "+url, func() {
-		defer bus.ClearBusHandlers()
+func TestHTTPServer_RotateUserAuthToken(t *testing.T) {
+	type testCase struct {
+		desc                 string
+		cookie               *http.Cookie
+		rotatedToken         *auth.UserToken
+		rotatedErr           error
+		expectedStatus       int
+		expectNewSession     bool
+		expectSessionDeleted bool
+	}
 
-		fakeAuthTokenService := auth.NewFakeUserAuthTokenService()
+	tests := []testCase{
+		{
+			desc:                 "Should return 401 and delete cookie if the token is invalid",
+			cookie:               &http.Cookie{Name: "grafana_session", Value: "123", Path: "/"},
+			rotatedErr:           auth.ErrInvalidSessionToken,
+			expectSessionDeleted: true,
+			expectedStatus:       http.StatusUnauthorized,
+		},
+		{
+			desc:           "Should return 401 and when token not found",
+			cookie:         &http.Cookie{Name: "grafana_session", Value: "123", Path: "/"},
+			rotatedErr:     auth.ErrUserTokenNotFound,
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			desc:           "Should return 200 and but not set new cookie if token was not rotated",
+			cookie:         &http.Cookie{Name: "grafana_session", Value: "123", Path: "/"},
+			rotatedToken:   &auth.UserToken{UnhashedToken: "123"},
+			expectedStatus: http.StatusOK,
+		},
+		{
+			desc:             "Should return 200 and set new session and expiry cookies",
+			cookie:           &http.Cookie{Name: "grafana_session", Value: "123", Path: "/"},
+			rotatedToken:     &auth.UserToken{UnhashedToken: "new"},
+			expectNewSession: true,
+			expectedStatus:   http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			server := SetupAPITestServer(t, func(hs *HTTPServer) {
+				cfg := setting.NewCfg()
+				cfg.LoginCookieName = "grafana_session"
+				cfg.LoginMaxLifetime = 10 * time.Hour
+				hs.Cfg = cfg
+				hs.log = log.New()
+				hs.Cfg.LoginCookieName = "grafana_session"
+				hs.Features = featuremgmt.WithFeatures(featuremgmt.FlagClientTokenRotation)
+				hs.AuthTokenService = &authtest.FakeUserAuthTokenService{
+					RotateTokenProvider: func(ctx context.Context, cmd auth.RotateCommand) (*auth.UserToken, error) {
+						return tt.rotatedToken, tt.rotatedErr
+					},
+				}
+			})
+
+			req := server.NewPostRequest("/api/user/auth-tokens/rotate", nil)
+			if tt.cookie != nil {
+				req.AddCookie(tt.cookie)
+			}
+
+			res, err := server.Send(req)
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectedStatus, res.StatusCode)
+
+			if tt.expectedStatus != http.StatusOK {
+				if tt.expectSessionDeleted {
+					cookies := res.Header.Values("Set-Cookie")
+					require.Len(t, cookies, 2)
+					assert.Equal(t, "grafana_session=; Path=/; Max-Age=0; HttpOnly", cookies[0])
+					assert.Equal(t, "grafana_session_expiry=; Path=/; Max-Age=0", cookies[1])
+				} else {
+					assert.Empty(t, res.Header.Get("Set-Cookie"))
+				}
+			} else {
+				if tt.expectNewSession {
+					cookies := res.Header.Values("Set-Cookie")
+					require.Len(t, cookies, 2)
+					assert.Equal(t, "grafana_session=new; Path=/; Max-Age=36000; HttpOnly", cookies[0])
+					assert.Equal(t, "grafana_session_expiry=-5; Path=/; Max-Age=36000", cookies[1])
+				} else {
+					assert.Empty(t, res.Header.Get("Set-Cookie"))
+				}
+			}
+
+			require.NoError(t, res.Body.Close())
+		})
+	}
+}
+
+func revokeUserAuthTokenScenario(t *testing.T, desc string, url string, routePattern string, cmd auth.RevokeAuthTokenCmd,
+	userId int64, fn scenarioFunc, userService user.Service) {
+	t.Run(fmt.Sprintf("%s %s", desc, url), func(t *testing.T) {
+		fakeAuthTokenService := authtest.NewFakeUserAuthTokenService()
 
 		hs := HTTPServer{
-			Bus:              bus.GetBus(),
 			AuthTokenService: fakeAuthTokenService,
+			userService:      userService,
 		}
 
-		sc := setupScenarioContext(url)
+		sc := setupScenarioContext(t, url)
 		sc.userAuthTokenService = fakeAuthTokenService
-		sc.defaultHandler = Wrap(func(c *models.ReqContext) Response {
+		sc.defaultHandler = routing.Wrap(func(c *contextmodel.ReqContext) response.Response {
+			c.Req.Body = mockRequestBody(cmd)
 			sc.context = c
-			sc.context.UserId = userId
-			sc.context.OrgId = TestOrgID
-			sc.context.OrgRole = models.ROLE_ADMIN
+			sc.context.UserID = userId
+			sc.context.OrgID = testOrgID
+			sc.context.OrgRole = org.RoleAdmin
 
-			return hs.RevokeUserAuthToken(c, cmd)
+			return hs.RevokeUserAuthToken(c)
 		})
 
 		sc.m.Post(routePattern, sc.defaultHandler)
@@ -193,24 +270,22 @@ func revokeUserAuthTokenScenario(desc string, url string, routePattern string, c
 	})
 }
 
-func getUserAuthTokensScenario(desc string, url string, routePattern string, userId int64, fn scenarioFunc) {
-	Convey(desc+" "+url, func() {
-		defer bus.ClearBusHandlers()
-
-		fakeAuthTokenService := auth.NewFakeUserAuthTokenService()
+func getUserAuthTokensScenario(t *testing.T, desc string, url string, routePattern string, userId int64, fn scenarioFunc, userService user.Service) {
+	t.Run(fmt.Sprintf("%s %s", desc, url), func(t *testing.T) {
+		fakeAuthTokenService := authtest.NewFakeUserAuthTokenService()
 
 		hs := HTTPServer{
-			Bus:              bus.GetBus(),
 			AuthTokenService: fakeAuthTokenService,
+			userService:      userService,
 		}
 
-		sc := setupScenarioContext(url)
+		sc := setupScenarioContext(t, url)
 		sc.userAuthTokenService = fakeAuthTokenService
-		sc.defaultHandler = Wrap(func(c *models.ReqContext) Response {
+		sc.defaultHandler = routing.Wrap(func(c *contextmodel.ReqContext) response.Response {
 			sc.context = c
-			sc.context.UserId = userId
-			sc.context.OrgId = TestOrgID
-			sc.context.OrgRole = models.ROLE_ADMIN
+			sc.context.UserID = userId
+			sc.context.OrgID = testOrgID
+			sc.context.OrgRole = org.RoleAdmin
 
 			return hs.GetUserAuthTokens(c)
 		})
@@ -221,21 +296,19 @@ func getUserAuthTokensScenario(desc string, url string, routePattern string, use
 	})
 }
 
-func logoutUserFromAllDevicesInternalScenario(desc string, userId int64, fn scenarioFunc) {
-	Convey(desc, func() {
-		defer bus.ClearBusHandlers()
-
+func logoutUserFromAllDevicesInternalScenario(t *testing.T, desc string, userId int64, fn scenarioFunc, userService user.Service) {
+	t.Run(desc, func(t *testing.T) {
 		hs := HTTPServer{
-			Bus:              bus.GetBus(),
-			AuthTokenService: auth.NewFakeUserAuthTokenService(),
+			AuthTokenService: authtest.NewFakeUserAuthTokenService(),
+			userService:      userService,
 		}
 
-		sc := setupScenarioContext("/")
-		sc.defaultHandler = Wrap(func(c *models.ReqContext) Response {
+		sc := setupScenarioContext(t, "/")
+		sc.defaultHandler = routing.Wrap(func(c *contextmodel.ReqContext) response.Response {
 			sc.context = c
-			sc.context.UserId = TestUserID
-			sc.context.OrgId = TestOrgID
-			sc.context.OrgRole = models.ROLE_ADMIN
+			sc.context.UserID = testUserID
+			sc.context.OrgID = testOrgID
+			sc.context.OrgRole = org.RoleAdmin
 
 			return hs.logoutUserFromAllDevicesInternal(context.Background(), userId)
 		})
@@ -246,56 +319,51 @@ func logoutUserFromAllDevicesInternalScenario(desc string, userId int64, fn scen
 	})
 }
 
-func revokeUserAuthTokenInternalScenario(desc string, cmd models.RevokeAuthTokenCmd, userId int64, token *models.UserToken, fn scenarioFunc) {
-	Convey(desc, func() {
-		defer bus.ClearBusHandlers()
-
-		fakeAuthTokenService := auth.NewFakeUserAuthTokenService()
+func revokeUserAuthTokenInternalScenario(t *testing.T, desc string, cmd auth.RevokeAuthTokenCmd, userId int64,
+	token *auth.UserToken, fn scenarioFunc, userService user.Service) {
+	t.Run(desc, func(t *testing.T) {
+		fakeAuthTokenService := authtest.NewFakeUserAuthTokenService()
 
 		hs := HTTPServer{
-			Bus:              bus.GetBus(),
 			AuthTokenService: fakeAuthTokenService,
+			userService:      userService,
 		}
 
-		sc := setupScenarioContext("/")
+		sc := setupScenarioContext(t, "/")
 		sc.userAuthTokenService = fakeAuthTokenService
-		sc.defaultHandler = Wrap(func(c *models.ReqContext) Response {
+		sc.defaultHandler = routing.Wrap(func(c *contextmodel.ReqContext) response.Response {
 			sc.context = c
-			sc.context.UserId = TestUserID
-			sc.context.OrgId = TestOrgID
-			sc.context.OrgRole = models.ROLE_ADMIN
+			sc.context.UserID = testUserID
+			sc.context.OrgID = testOrgID
+			sc.context.OrgRole = org.RoleAdmin
 			sc.context.UserToken = token
 
 			return hs.revokeUserAuthTokenInternal(c, userId, cmd)
 		})
-
 		sc.m.Post("/", sc.defaultHandler)
-
 		fn(sc)
 	})
 }
 
-func getUserAuthTokensInternalScenario(desc string, token *models.UserToken, fn scenarioFunc) {
-	Convey(desc, func() {
-		defer bus.ClearBusHandlers()
-
-		fakeAuthTokenService := auth.NewFakeUserAuthTokenService()
+func getUserAuthTokensInternalScenario(t *testing.T, desc string, token *auth.UserToken, fn scenarioFunc, userService user.Service) {
+	t.Run(desc, func(t *testing.T) {
+		fakeAuthTokenService := authtest.NewFakeUserAuthTokenService()
 
 		hs := HTTPServer{
-			Bus:              bus.GetBus(),
 			AuthTokenService: fakeAuthTokenService,
+			userService:      userService,
 		}
 
-		sc := setupScenarioContext("/")
+		sc := setupScenarioContext(t, "/")
 		sc.userAuthTokenService = fakeAuthTokenService
-		sc.defaultHandler = Wrap(func(c *models.ReqContext) Response {
+		sc.defaultHandler = routing.Wrap(func(c *contextmodel.ReqContext) response.Response {
 			sc.context = c
-			sc.context.UserId = TestUserID
-			sc.context.OrgId = TestOrgID
-			sc.context.OrgRole = models.ROLE_ADMIN
+			sc.context.UserID = testUserID
+			sc.context.OrgID = testOrgID
+			sc.context.OrgRole = org.RoleAdmin
 			sc.context.UserToken = token
 
-			return hs.getUserAuthTokensInternal(c, TestUserID)
+			return hs.getUserAuthTokensInternal(c, testUserID)
 		})
 
 		sc.m.Get("/", sc.defaultHandler)

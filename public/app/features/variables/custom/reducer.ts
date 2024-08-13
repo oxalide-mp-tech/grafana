@@ -1,8 +1,9 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
+import { ALL_VARIABLE_TEXT, ALL_VARIABLE_VALUE } from '../constants';
+import { getInstanceState } from '../state/selectors';
+import { initialVariablesState, VariablePayload, VariablesState } from '../state/types';
 import { CustomVariableModel, initialVariableModelState, VariableOption } from '../types';
-import { ALL_VARIABLE_TEXT, ALL_VARIABLE_VALUE, getInstanceState, VariablePayload } from '../state/types';
-import { initialVariablesState, VariablesState } from '../state/variablesReducer';
 
 export const initialCustomVariableModelState: CustomVariableModel = {
   ...initialVariableModelState,
@@ -19,15 +20,20 @@ export const customVariableSlice = createSlice({
   name: 'templating/custom',
   initialState: initialVariablesState,
   reducers: {
-    createCustomOptionsFromQuery: (state: VariablesState, action: PayloadAction<VariablePayload>) => {
-      const instanceState = getInstanceState<CustomVariableModel>(state, action.payload.id);
-      const { includeAll, query } = instanceState;
-      const match = query.match(/(?:\\,|[^,])+/g) ?? [];
-      const options = match.map(text => {
+    createCustomOptionsFromQuery: (state: VariablesState, action: PayloadAction<VariablePayload<string>>) => {
+      const instanceState = getInstanceState(state, action.payload.id);
+      if (instanceState.type !== 'custom') {
+        return;
+      }
+
+      const { includeAll } = instanceState;
+      const queryInterpolated = action.payload.data;
+      const match = queryInterpolated.match(/(?:\\,|[^,])+/g) ?? [];
+      const options = match.map((text) => {
         text = text.replace(/\\,/g, ',');
-        const textMatch = text.match(/(?:\\:|[^:])+/g) ?? [];
-        if (textMatch.length > 1) {
-          const [key, value] = textMatch;
+        const textMatch = /^(.+)\s:\s(.+)$/g.exec(text) ?? [];
+        if (textMatch.length === 3) {
+          const [, key, value] = textMatch;
           return { text: key.trim(), value: value.trim(), selected: false };
         } else {
           return { text: text.trim(), value: text.trim(), selected: false };

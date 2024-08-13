@@ -1,24 +1,33 @@
-import { seriesToColumnsTransformer } from './seriesToColumns';
-import { DataFrame } from '../../types/dataFrame';
-import { getTimeField } from '../../dataframe/processDataFrame';
-import { DataTransformerInfo } from '../../types/transformations';
-import { DataTransformerID } from './ids';
+import { map } from 'rxjs/operators';
 
-export const ensureColumnsTransformer: DataTransformerInfo = {
+import { getTimeField } from '../../dataframe/processDataFrame';
+import { DataFrame } from '../../types/dataFrame';
+import { SynchronousDataTransformerInfo } from '../../types/transformations';
+
+import { DataTransformerID } from './ids';
+import { joinByFieldTransformer } from './joinByField';
+
+export const ensureColumnsTransformer: SynchronousDataTransformerInfo = {
   id: DataTransformerID.ensureColumns,
   name: 'Ensure Columns Transformer',
   description: 'Will check if current data frames is series or columns. If in series it will convert to columns.',
-  transformer: () => (data: DataFrame[]) => {
+
+  operator: (options, ctx) => (source) =>
+    source.pipe(map((data) => ensureColumnsTransformer.transformer(options, ctx)(data))),
+
+  transformer: (_options, ctx) => (frames: DataFrame[]) => {
     // Assume timeseries should first be joined by time
-    const timeFieldName = findConsistentTimeFieldName(data);
+    const timeFieldName = findConsistentTimeFieldName(frames);
 
-    if (data.length > 1 && timeFieldName) {
-      return seriesToColumnsTransformer.transformer({
-        byField: timeFieldName,
-      })(data);
+    if (frames.length > 1 && timeFieldName) {
+      return joinByFieldTransformer.transformer(
+        {
+          byField: timeFieldName,
+        },
+        ctx
+      )(frames);
     }
-
-    return data;
+    return frames;
   },
 };
 

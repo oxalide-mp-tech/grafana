@@ -1,6 +1,7 @@
-import { toFilters, toUrl } from './urlParser';
-import { AdHocVariableFilter } from 'app/features/variables/types';
 import { UrlQueryValue } from '@grafana/data';
+import { AdHocVariableFilter } from 'app/features/variables/types';
+
+import { toFilters, toUrl } from './urlParser';
 
 describe('urlParser', () => {
   describe('parsing toUrl with no filters', () => {
@@ -37,6 +38,74 @@ describe('urlParser', () => {
       const expectedA = `a__gfp__-key|${a.operator}|a__gfp__-value`;
       const expectedB = `${b.key}|${b.operator}|${b.value}`;
       const expected: string[] = [expectedA, expectedB];
+
+      expect(toUrl(filters)).toEqual(expected);
+    });
+  });
+
+  describe('parsing toUrl with filters without values', () => {
+    it('then url params should be correct', () => {
+      const a: AdHocVariableFilter = {
+        value: '',
+        key: 'key',
+        operator: '',
+      };
+
+      const filters: AdHocVariableFilter[] = [a];
+
+      const expectedA = `key||`;
+      const expected: string[] = [expectedA];
+
+      expect(toUrl(filters)).toEqual(expected);
+    });
+  });
+
+  describe('parsing toUrl with filters with undefined values', () => {
+    it('then url params should be correct', () => {
+      const a = {
+        value: undefined,
+        key: 'key',
+        operator: undefined,
+      } as unknown as AdHocVariableFilter;
+
+      const filters: AdHocVariableFilter[] = [a];
+
+      const expectedA = `key||`;
+      const expected: string[] = [expectedA];
+
+      expect(toUrl(filters)).toEqual(expected);
+    });
+  });
+
+  describe('parsing toUrl with filters with number values', () => {
+    it('then url params should be correct', () => {
+      const a = {
+        value: 1974,
+        key: 'key',
+        operator: '=',
+      } as unknown as AdHocVariableFilter;
+
+      const filters: AdHocVariableFilter[] = [a];
+
+      const expectedA = `key|=|1974`;
+      const expected: string[] = [expectedA];
+
+      expect(toUrl(filters)).toEqual(expected);
+    });
+  });
+
+  describe('parsing toUrl with filters with boolean values', () => {
+    it('then url params should be correct', () => {
+      const a = {
+        value: false,
+        key: 'key',
+        operator: '=',
+      } as unknown as AdHocVariableFilter;
+
+      const filters: AdHocVariableFilter[] = [a];
+
+      const expectedA = `key|=|false`;
+      const expected: string[] = [expectedA];
 
       expect(toUrl(filters)).toEqual(expected);
     });
@@ -89,6 +158,29 @@ describe('urlParser', () => {
       expect(toFilters(url)).toEqual(expected);
     });
   });
+
+  describe('parsing toFilters with url containing filter with empty values', () => {
+    it('then url params should be correct', () => {
+      const url: UrlQueryValue = 'key||';
+      const expected: AdHocVariableFilter[] = [
+        {
+          value: '',
+          key: 'key',
+          operator: '',
+        },
+      ];
+
+      expect(toFilters(url)).toEqual(expected);
+    });
+  });
+
+  describe('parsing toFilters with url containing no filters as string', () => {
+    it('then url params should be correct', () => {
+      const url: UrlQueryValue = '';
+      const expected: AdHocVariableFilter[] = [];
+      expect(toFilters(url)).toEqual(expected);
+    });
+  });
 });
 
 function createFilter(value: string, operator = '='): AdHocVariableFilter {
@@ -96,6 +188,5 @@ function createFilter(value: string, operator = '='): AdHocVariableFilter {
     value: `${value}-value`,
     key: `${value}-key`,
     operator: operator,
-    condition: '',
   };
 }

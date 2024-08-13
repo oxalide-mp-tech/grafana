@@ -1,161 +1,115 @@
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import React from 'react';
-import { shallow } from 'enzyme';
-import { AlertRuleList, Props } from './AlertRuleList';
-import { AlertRule } from '../../types';
-import appEvents from '../../core/app_events';
-import { NavModel } from '@grafana/data';
-import { CoreEvents } from 'app/types';
-import { updateLocation } from '../../core/actions';
-import { setSearchQuery } from './state/reducers';
+import { openMenu } from 'react-select-event';
 import { mockToolkitActionCreator } from 'test/core/redux/mocks';
+import { TestProvider } from 'test/helpers/TestProvider';
+
+import { locationService } from '@grafana/runtime';
+import { getRouteComponentProps } from 'app/core/navigation/__mocks__/routeProps';
+
+import appEvents from '../../core/app_events';
+import { ShowModalReactEvent } from '../../types/events';
+
+import { AlertHowToModal } from './AlertHowToModal';
+import { AlertRuleListUnconnected, Props } from './AlertRuleList';
+import { setSearchQuery } from './state/reducers';
 
 jest.mock('../../core/app_events', () => ({
-  emit: jest.fn(),
+  publish: jest.fn(),
 }));
+
+const defaultProps: Props = {
+  ...getRouteComponentProps({}),
+  search: '',
+  isLoading: false,
+  alertRules: [],
+  getAlertRulesAsync: jest.fn().mockResolvedValue([]),
+  setSearchQuery: mockToolkitActionCreator(setSearchQuery),
+  togglePauseAlertRule: jest.fn(),
+};
 
 const setup = (propOverrides?: object) => {
   const props: Props = {
-    navModel: {} as NavModel,
-    alertRules: [] as AlertRule[],
-    updateLocation: mockToolkitActionCreator(updateLocation),
-    getAlertRulesAsync: jest.fn(),
-    setSearchQuery: mockToolkitActionCreator(setSearchQuery),
-    togglePauseAlertRule: jest.fn(),
-    stateFilter: '',
-    search: '',
-    isLoading: false,
+    ...defaultProps,
+    ...propOverrides,
   };
 
-  Object.assign(props, propOverrides);
-
-  const wrapper = shallow(<AlertRuleList {...props} />);
+  const { rerender } = render(
+    <TestProvider>
+      <AlertRuleListUnconnected {...props} />
+    </TestProvider>
+  );
 
   return {
-    wrapper,
-    instance: wrapper.instance() as AlertRuleList,
+    rerender: (element: JSX.Element) => rerender(<TestProvider>{element}</TestProvider>),
   };
 };
 
-describe('Render', () => {
-  it('should render component', () => {
-    const { wrapper } = setup();
-
-    expect(wrapper).toMatchSnapshot();
-  });
-
-  it('should render alert rules', () => {
-    const { wrapper } = setup({
-      alertRules: [
-        {
-          id: 1,
-          dashboardId: 7,
-          dashboardUid: 'ggHbN42mk',
-          dashboardSlug: 'alerting-with-testdata',
-          panelId: 3,
-          name: 'TestData - Always OK',
-          state: 'ok',
-          newStateDate: '2018-09-04T10:01:01+02:00',
-          evalDate: '0001-01-01T00:00:00Z',
-          evalData: {},
-          executionError: '',
-          url: '/d/ggHbN42mk/alerting-with-testdata',
-        },
-        {
-          id: 3,
-          dashboardId: 7,
-          dashboardUid: 'ggHbN42mk',
-          dashboardSlug: 'alerting-with-testdata',
-          panelId: 3,
-          name: 'TestData - ok',
-          state: 'ok',
-          newStateDate: '2018-09-04T10:01:01+02:00',
-          evalDate: '0001-01-01T00:00:00Z',
-          evalData: {},
-          executionError: 'error',
-          url: '/d/ggHbN42mk/alerting-with-testdata',
-        },
-      ],
-    });
-
-    expect(wrapper).toMatchSnapshot();
-  });
+afterEach(() => {
+  jest.clearAllMocks();
 });
 
-describe('Life cycle', () => {
-  describe('component did mount', () => {
-    it('should call fetchrules', () => {
-      const { instance } = setup();
-      instance.fetchRules = jest.fn();
-      instance.componentDidMount();
-      expect(instance.fetchRules).toHaveBeenCalled();
-    });
+describe('AlertRuleList', () => {
+  it('should call fetchrules when mounting', () => {
+    jest.spyOn(AlertRuleListUnconnected.prototype, 'fetchRules');
+
+    expect(AlertRuleListUnconnected.prototype.fetchRules).not.toHaveBeenCalled();
+    setup();
+    expect(AlertRuleListUnconnected.prototype.fetchRules).toHaveBeenCalled();
   });
 
-  describe('component did update', () => {
-    it('should call fetchrules if props differ', () => {
-      const { instance } = setup();
-      instance.fetchRules = jest.fn();
+  it('should call fetchrules when props change', () => {
+    const fetchRulesSpy = jest.spyOn(AlertRuleListUnconnected.prototype, 'fetchRules');
+    expect(AlertRuleListUnconnected.prototype.fetchRules).not.toHaveBeenCalled();
+    const { rerender } = setup();
+    expect(AlertRuleListUnconnected.prototype.fetchRules).toHaveBeenCalled();
 
-      instance.componentDidUpdate({ stateFilter: 'ok' } as Props);
-
-      expect(instance.fetchRules).toHaveBeenCalled();
-    });
+    fetchRulesSpy.mockReset();
+    rerender(<AlertRuleListUnconnected {...defaultProps} queryParams={{ state: 'ok' }} />);
+    expect(AlertRuleListUnconnected.prototype.fetchRules).toHaveBeenCalled();
   });
-});
 
-describe('Functions', () => {
   describe('Get state filter', () => {
-    it('should get all if prop is not set', () => {
-      const { instance } = setup();
-
-      const stateFilter = instance.getStateFilter();
-
-      expect(stateFilter).toEqual('all');
+    it('should be all if prop is not set', () => {
+      setup();
+      expect(screen.getByText('All')).toBeInTheDocument();
     });
 
     it('should return state filter if set', () => {
-      const { instance } = setup({
-        stateFilter: 'ok',
+      setup({
+        queryParams: { state: 'not_ok' },
       });
-
-      const stateFilter = instance.getStateFilter();
-
-      expect(stateFilter).toEqual('ok');
+      expect(screen.getByText('Not OK')).toBeInTheDocument();
     });
   });
 
   describe('State filter changed', () => {
-    it('should update location', () => {
-      const { instance } = setup();
-      const mockEvent = { value: 'alerting' };
-
-      instance.onStateFilterChanged(mockEvent);
-
-      expect(instance.props.updateLocation).toHaveBeenCalledWith({ query: { state: 'alerting' } });
+    it('should update location', async () => {
+      setup();
+      const stateFilterSelect = screen.getByLabelText('States');
+      openMenu(stateFilterSelect);
+      await userEvent.click(screen.getByText('Not OK'));
+      expect(locationService.getSearchObject().state).toBe('not_ok');
     });
   });
 
   describe('Open how to', () => {
-    it('should emit show-modal event', () => {
-      const { instance } = setup();
+    it('should emit show-modal event', async () => {
+      setup();
 
-      instance.onOpenHowTo();
-
-      expect(appEvents.emit).toHaveBeenCalledWith(CoreEvents.showModal, {
-        src: 'public/app/features/alerting/partials/alert_howto.html',
-        modalClass: 'confirm-modal',
-        model: {},
-      });
+      await userEvent.click(screen.getByRole('button', { name: 'How to add an alert' }));
+      expect(appEvents.publish).toHaveBeenCalledWith(new ShowModalReactEvent({ component: AlertHowToModal }));
     });
   });
 
   describe('Search query change', () => {
-    it('should set search query', () => {
-      const { instance } = setup();
+    it('should set search query', async () => {
+      setup();
 
-      instance.onSearchQueryChange('dashboard');
-
-      expect(instance.props.setSearchQuery).toHaveBeenCalledWith('dashboard');
+      await userEvent.click(screen.getByPlaceholderText('Search alerts'));
+      await userEvent.paste('dashboard');
+      expect(defaultProps.setSearchQuery).toHaveBeenCalledWith('dashboard');
     });
   });
 });

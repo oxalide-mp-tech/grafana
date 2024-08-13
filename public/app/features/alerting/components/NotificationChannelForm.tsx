@@ -1,13 +1,18 @@
-import React, { FC, useEffect } from 'react';
-import { css } from 'emotion';
-import { GrafanaTheme, SelectableValue } from '@grafana/data';
-import { Button, FormAPI, HorizontalGroup, stylesFactory, useTheme, Spinner } from '@grafana/ui';
+import { css } from '@emotion/css';
+import React, { useEffect } from 'react';
+
+import { GrafanaTheme2, SelectableValue } from '@grafana/data';
+import { Button, FormAPI, HorizontalGroup, Spinner, useStyles2 } from '@grafana/ui';
+import config from 'app/core/config';
+
 import { NotificationChannelType, NotificationChannelDTO, NotificationChannelSecureFields } from '../../../types';
-import { NotificationSettings } from './NotificationSettings';
+
 import { BasicSettings } from './BasicSettings';
 import { ChannelSettings } from './ChannelSettings';
+import { NotificationSettings } from './NotificationSettings';
 
-interface Props extends Omit<FormAPI<NotificationChannelDTO>, 'formState'> {
+interface Props
+  extends Pick<FormAPI<NotificationChannelDTO>, 'control' | 'errors' | 'register' | 'watch' | 'getValues'> {
   selectableChannels: Array<SelectableValue<string>>;
   selectedChannel?: NotificationChannelType;
   imageRendererAvailable: boolean;
@@ -17,11 +22,11 @@ interface Props extends Omit<FormAPI<NotificationChannelDTO>, 'formState'> {
 }
 
 export interface NotificationSettingsProps
-  extends Omit<FormAPI<NotificationChannelDTO>, 'formState' | 'watch' | 'getValues'> {
+  extends Pick<FormAPI<NotificationChannelDTO>, 'control' | 'errors' | 'register'> {
   currentFormValues: NotificationChannelDTO;
 }
 
-export const NotificationChannelForm: FC<Props> = ({
+export const NotificationChannelForm = ({
   control,
   errors,
   selectedChannel,
@@ -33,12 +38,24 @@ export const NotificationChannelForm: FC<Props> = ({
   onTestChannel,
   resetSecureField,
   secureFields,
-}) => {
-  const styles = getStyles(useTheme());
+}: Props) => {
+  const styles = useStyles2(getStyles);
 
   useEffect(() => {
-    watch(['type', 'settings.priority', 'sendReminder', 'uploadImage']);
-  }, []);
+    /*
+      Find fields that have dependencies on other fields and removes duplicates.
+      Needs to be prefixed with settings.
+    */
+    const fieldsToWatch =
+      new Set(
+        selectedChannel?.options
+          .filter((o) => o.showWhen.field)
+          .map((option) => {
+            return `settings.${option.showWhen.field}`;
+          })
+      ) || [];
+    watch(['type', 'sendReminder', 'uploadImage', ...fieldsToWatch]);
+  }, [selectedChannel?.options, watch]);
 
   const currentFormValues = getValues();
 
@@ -61,7 +78,7 @@ export const NotificationChannelForm: FC<Props> = ({
         />
       </div>
       {/* If there are no non-required fields, don't render this section*/}
-      {selectedChannel.options.filter(o => !o.required).length > 0 && (
+      {selectedChannel.options.filter((o) => !o.required).length > 0 && (
         <div className={styles.formItem}>
           <ChannelSettings
             selectedChannel={selectedChannel}
@@ -86,10 +103,10 @@ export const NotificationChannelForm: FC<Props> = ({
       <div className={styles.formButtons}>
         <HorizontalGroup>
           <Button type="submit">Save</Button>
-          <Button type="button" variant="secondary" onClick={() => onTestChannel(getValues({ nest: true }))}>
+          <Button type="button" variant="secondary" onClick={() => onTestChannel(getValues())}>
             Test
           </Button>
-          <a href="/alerting/notifications">
+          <a href={`${config.appSubUrl}/alerting-legacy/notifications`}>
             <Button type="button" variant="secondary">
               Back
             </Button>
@@ -100,15 +117,15 @@ export const NotificationChannelForm: FC<Props> = ({
   );
 };
 
-const getStyles = stylesFactory((theme: GrafanaTheme) => {
+const getStyles = (theme: GrafanaTheme2) => {
   return {
     formContainer: css``,
     formItem: css`
       flex-grow: 1;
-      padding-top: ${theme.spacing.md};
+      padding-top: ${theme.spacing(2)};
     `,
     formButtons: css`
-      padding-top: ${theme.spacing.xl};
+      padding-top: ${theme.spacing(4)};
     `,
   };
-});
+};

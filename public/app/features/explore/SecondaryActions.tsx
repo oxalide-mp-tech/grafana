@@ -1,10 +1,15 @@
+import { css } from '@emotion/css';
 import React from 'react';
-import { css, cx } from 'emotion';
-import { stylesFactory, Icon } from '@grafana/ui';
+
+import { GrafanaTheme2 } from '@grafana/data';
+import { Components } from '@grafana/e2e-selectors';
+import { ToolbarButton, useTheme2 } from '@grafana/ui';
+import { t, Trans } from 'app/core/internationalization';
 
 type Props = {
   addQueryRowButtonDisabled?: boolean;
   addQueryRowButtonHidden?: boolean;
+  richHistoryRowButtonHidden?: boolean;
   richHistoryButtonActive?: boolean;
   queryInspectorButtonActive?: boolean;
 
@@ -13,48 +18,52 @@ type Props = {
   onClickQueryInspectorButton: () => void;
 };
 
-const getStyles = stylesFactory(() => {
+const getStyles = (theme: GrafanaTheme2) => {
   return {
-    button: css`
-      margin: 1em 4px 0 0;
+    containerMargin: css`
+      display: flex;
+      flex-wrap: wrap;
+      gap: ${theme.spacing(1)};
+      margin-top: ${theme.spacing(2)};
     `,
   };
-});
+};
+
 export function SecondaryActions(props: Props) {
-  const styles = getStyles();
+  const theme = useTheme2();
+  const styles = getStyles(theme);
   return (
-    <div className="gf-form">
+    <div className={styles.containerMargin}>
       {!props.addQueryRowButtonHidden && (
-        <button
-          aria-label="Add row button"
-          className={`gf-form-label gf-form-label--btn ${styles.button}`}
+        <ToolbarButton
+          variant="canvas"
+          aria-label={t('explore.secondary-actions.query-add-button-aria-label', 'Add query')}
           onClick={props.onClickAddQueryRowButton}
           disabled={props.addQueryRowButtonDisabled}
+          icon="plus"
         >
-          <Icon className="icon-margin-right" name="plus" size="sm" />
-          <span className="btn-title">{'\xA0' + 'Add query'}</span>
-        </button>
+          <Trans i18nKey="explore.secondary-actions.query-add-button">Add query</Trans>
+        </ToolbarButton>
       )}
-      <button
-        aria-label="Rich history button"
-        className={cx(`gf-form-label gf-form-label--btn ${styles.button}`, {
-          ['explore-active-button']: props.richHistoryButtonActive,
-        })}
-        onClick={props.onClickRichHistoryButton}
-      >
-        <Icon className="icon-margin-right" name="history" size="sm" />
-        <span className="btn-title">{'\xA0' + 'Query history'}</span>
-      </button>
-      <button
-        aria-label="Query inspector button"
-        className={cx(`gf-form-label gf-form-label--btn ${styles.button}`, {
-          ['explore-active-button']: props.queryInspectorButtonActive,
-        })}
+      {!props.richHistoryRowButtonHidden && (
+        <ToolbarButton
+          variant={props.richHistoryButtonActive ? 'active' : 'canvas'}
+          aria-label={t('explore.secondary-actions.query-history-button-aria-label', 'Query history')}
+          onClick={props.onClickRichHistoryButton}
+          data-testid={Components.QueryTab.queryHistoryButton}
+          icon="history"
+        >
+          <Trans i18nKey="explore.secondary-actions.query-history-button">Query history</Trans>
+        </ToolbarButton>
+      )}
+      <ToolbarButton
+        variant={props.queryInspectorButtonActive ? 'active' : 'canvas'}
+        aria-label={t('explore.secondary-actions.query-inspector-button-aria-label', 'Query inspector')}
         onClick={props.onClickQueryInspectorButton}
+        icon="info-circle"
       >
-        <Icon className="icon-margin-right" name="info-circle" size="sm" />
-        <span className="btn-title">{'\xA0' + 'Query inspector'}</span>
-      </button>
+        <Trans i18nKey="explore.secondary-actions.query-inspector-button">Query inspector</Trans>
+      </ToolbarButton>
     </div>
   );
 }

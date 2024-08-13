@@ -2,217 +2,148 @@ package prometheus
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
-	"github.com/opentracing/opentracing-go"
-
-	"net/http"
-
-	"github.com/grafana/grafana/pkg/components/null"
-	"github.com/grafana/grafana/pkg/infra/log"
-	"github.com/grafana/grafana/pkg/models"
-	"github.com/grafana/grafana/pkg/tsdb"
-	api "github.com/prometheus/client_golang/api"
+	"github.com/grafana/grafana-plugin-sdk-go/backend"
+	"github.com/grafana/grafana-plugin-sdk-go/backend/datasource"
+	"github.com/grafana/grafana-plugin-sdk-go/backend/instancemgmt"
+	"github.com/grafana/grafana-plugin-sdk-go/backend/log"
+	"github.com/patrickmn/go-cache"
 	apiv1 "github.com/prometheus/client_golang/api/prometheus/v1"
-	"github.com/prometheus/common/model"
+
+	"github.com/grafana/grafana-plugin-sdk-go/backend/httpclient"
+	"github.com/grafana/grafana/pkg/services/featuremgmt"
+	"github.com/grafana/grafana/pkg/setting"
+	"github.com/grafana/grafana/pkg/tsdb/prometheus/client"
+	"github.com/grafana/grafana/pkg/tsdb/prometheus/instrumentation"
+	"github.com/grafana/grafana/pkg/tsdb/prometheus/querydata"
+	"github.com/grafana/grafana/pkg/tsdb/prometheus/resource"
 )
 
-type PrometheusExecutor struct {
-	Transport http.RoundTripper
+type Service struct {
+	im       instancemgmt.InstanceManager
+	features featuremgmt.FeatureToggles
+	logger   log.Logger
 }
 
-type basicAuthTransport struct {
-	Transport http.RoundTripper
-
-	username string
-	password string
+type instance struct {
+	queryData    *querydata.QueryData
+	resource     *resource.Resource
+	versionCache *cache.Cache
 }
 
-func (bat basicAuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	req.SetBasicAuth(bat.username, bat.password)
-	return bat.Transport.RoundTrip(req)
+func ProvideService(httpClientProvider *httpclient.Provider, cfg *setting.Cfg, features featuremgmt.FeatureToggles) *Service {
+	plog := backend.NewLoggerWith("logger", "tsdb.prometheus")
+	plog.Debug("Initializing")
+	return &Service{
+		im:       datasource.NewInstanceManager(newInstanceSettings(httpClientProvider, cfg, features, plog)),
+		features: features,
+		logger:   plog,
+	}
 }
 
-func NewPrometheusExecutor(dsInfo *models.DataSource) (tsdb.TsdbQueryEndpoint, error) {
-	transport, err := dsInfo.GetHttpTransport()
+func newInstanceSettings(httpClientProvider *httpclient.Provider, cfg *setting.Cfg, features featuremgmt.FeatureToggles, log log.Logger) datasource.InstanceFactoryFunc {
+	return func(ctx context.Context, settings backend.DataSourceInstanceSettings) (instancemgmt.Instance, error) {
+		// Creates a http roundTripper.
+		opts, err := client.CreateTransportOptions(ctx, settings, cfg, log)
+		if err != nil {
+			return nil, fmt.Errorf("error creating transport options: %v", err)
+		}
+		httpClient, err := httpClientProvider.New(*opts)
+		if err != nil {
+			return nil, fmt.Errorf("error creating http client: %v", err)
+		}
+
+		// New version using custom client and better response parsing
+		qd, err := querydata.New(httpClient, features, settings, log)
+		if err != nil {
+			return nil, err
+		}
+
+		// Resource call management using new custom client same as querydata
+		r, err := resource.New(httpClient, settings, log)
+		if err != nil {
+			return nil, err
+		}
+
+		return instance{
+			queryData:    qd,
+			resource:     r,
+			versionCache: cache.New(time.Minute*1, time.Minute*5),
+		}, nil
+	}
+}
+
+func (s *Service) QueryData(ctx context.Context, req *backend.QueryDataRequest) (*backend.QueryDataResponse, error) {
+	if len(req.Queries) == 0 {
+		err := fmt.Errorf("query contains no queries")
+		instrumentation.UpdateQueryDataMetrics(err, nil)
+		return &backend.QueryDataResponse{}, err
+	}
+
+	i, err := s.getInstance(ctx, req.PluginContext)
 	if err != nil {
+		instrumentation.UpdateQueryDataMetrics(err, nil)
 		return nil, err
 	}
 
-	return &PrometheusExecutor{
-		Transport: transport,
-	}, nil
+	qd, err := i.queryData.Execute(ctx, req)
+	instrumentation.UpdateQueryDataMetrics(err, qd)
+
+	return qd, err
 }
 
-var (
-	plog               log.Logger
-	legendFormat       *regexp.Regexp
-	intervalCalculator tsdb.IntervalCalculator
-)
-
-func init() {
-	plog = log.New("tsdb.prometheus")
-	tsdb.RegisterTsdbQueryEndpoint("prometheus", NewPrometheusExecutor)
-	legendFormat = regexp.MustCompile(`\{\{\s*(.+?)\s*\}\}`)
-	intervalCalculator = tsdb.NewIntervalCalculator(&tsdb.IntervalOptions{MinInterval: time.Second * 1})
-}
-
-func (e *PrometheusExecutor) getClient(dsInfo *models.DataSource) (apiv1.API, error) {
-	cfg := api.Config{
-		Address:      dsInfo.Url,
-		RoundTripper: e.Transport,
+func (s *Service) CallResource(ctx context.Context, req *backend.CallResourceRequest, sender backend.CallResourceResponseSender) error {
+	i, err := s.getInstance(ctx, req.PluginContext)
+	if err != nil {
+		return err
 	}
 
-	if dsInfo.BasicAuth {
-		cfg.RoundTripper = basicAuthTransport{
-			Transport: e.Transport,
-			username:  dsInfo.BasicAuthUser,
-			password:  dsInfo.DecryptedBasicAuthPassword(),
+	if strings.EqualFold(req.Path, "version-detect") {
+		versionObj, found := i.versionCache.Get("version")
+		if found {
+			return sender.Send(versionObj.(*backend.CallResourceResponse))
 		}
+
+		vResp, err := i.resource.DetectVersion(ctx, req)
+		if err != nil {
+			return err
+		}
+		i.versionCache.Set("version", vResp, cache.DefaultExpiration)
+		return sender.Send(vResp)
 	}
 
-	client, err := api.NewClient(cfg)
+	resp, err := i.resource.Execute(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	return sender.Send(resp)
+}
+
+func (s *Service) getInstance(ctx context.Context, pluginCtx backend.PluginContext) (*instance, error) {
+	i, err := s.im.Get(ctx, pluginCtx)
 	if err != nil {
 		return nil, err
 	}
-
-	return apiv1.NewAPI(client), nil
+	in := i.(instance)
+	return &in, nil
 }
 
-func (e *PrometheusExecutor) Query(ctx context.Context, dsInfo *models.DataSource, tsdbQuery *tsdb.TsdbQuery) (*tsdb.Response, error) {
-	result := &tsdb.Response{
-		Results: map[string]*tsdb.QueryResult{},
-	}
-
-	client, err := e.getClient(dsInfo)
-	if err != nil {
-		return nil, err
-	}
-
-	queries, err := parseQuery(dsInfo, tsdbQuery.Queries, tsdbQuery)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, query := range queries {
-		timeRange := apiv1.Range{
-			Start: query.Start,
-			End:   query.End,
-			Step:  query.Step,
-		}
-
-		plog.Debug("Sending query", "start", timeRange.Start, "end", timeRange.End, "step", timeRange.Step, "query", query.Expr)
-
-		span, ctx := opentracing.StartSpanFromContext(ctx, "alerting.prometheus")
-		span.SetTag("expr", query.Expr)
-		span.SetTag("start_unixnano", query.Start.UnixNano())
-		span.SetTag("stop_unixnano", query.End.UnixNano())
-		defer span.Finish()
-
-		value, _, err := client.QueryRange(ctx, query.Expr, timeRange)
-
-		if err != nil {
-			return nil, err
-		}
-
-		queryResult, err := parseResponse(value, query)
-		if err != nil {
-			return nil, err
-		}
-		result.Results[query.RefId] = queryResult
-	}
-
-	return result, nil
+// IsAPIError returns whether err is or wraps a Prometheus error.
+func IsAPIError(err error) bool {
+	// Check if the right error type is in err's chain.
+	var e *apiv1.Error
+	return errors.As(err, &e)
 }
 
-func formatLegend(metric model.Metric, query *PrometheusQuery) string {
-	if query.LegendFormat == "" {
-		return metric.String()
+func ConvertAPIError(err error) error {
+	var e *apiv1.Error
+	if errors.As(err, &e) {
+		return fmt.Errorf("%s: %s", e.Msg, e.Detail)
 	}
-
-	result := legendFormat.ReplaceAllFunc([]byte(query.LegendFormat), func(in []byte) []byte {
-		labelName := strings.Replace(string(in), "{{", "", 1)
-		labelName = strings.Replace(labelName, "}}", "", 1)
-		labelName = strings.TrimSpace(labelName)
-		if val, exists := metric[model.LabelName(labelName)]; exists {
-			return []byte(val)
-		}
-		return []byte{}
-	})
-
-	return string(result)
-}
-
-func parseQuery(dsInfo *models.DataSource, queries []*tsdb.Query, queryContext *tsdb.TsdbQuery) ([]*PrometheusQuery, error) {
-	qs := []*PrometheusQuery{}
-	for _, queryModel := range queries {
-		expr, err := queryModel.Model.Get("expr").String()
-		if err != nil {
-			return nil, err
-		}
-
-		format := queryModel.Model.Get("legendFormat").MustString("")
-
-		start, err := queryContext.TimeRange.ParseFrom()
-		if err != nil {
-			return nil, err
-		}
-
-		end, err := queryContext.TimeRange.ParseTo()
-		if err != nil {
-			return nil, err
-		}
-
-		dsInterval, err := tsdb.GetIntervalFrom(dsInfo, queryModel.Model, time.Second*15)
-		if err != nil {
-			return nil, err
-		}
-
-		intervalFactor := queryModel.Model.Get("intervalFactor").MustInt64(1)
-		interval := intervalCalculator.Calculate(queryContext.TimeRange, dsInterval)
-		step := time.Duration(int64(interval.Value) * intervalFactor)
-
-		qs = append(qs, &PrometheusQuery{
-			Expr:         expr,
-			Step:         step,
-			LegendFormat: format,
-			Start:        start,
-			End:          end,
-			RefId:        queryModel.RefId,
-		})
-	}
-
-	return qs, nil
-}
-
-func parseResponse(value model.Value, query *PrometheusQuery) (*tsdb.QueryResult, error) {
-	queryRes := tsdb.NewQueryResult()
-
-	data, ok := value.(model.Matrix)
-	if !ok {
-		return queryRes, fmt.Errorf("Unsupported result format: %s", value.Type().String())
-	}
-
-	for _, v := range data {
-		series := tsdb.TimeSeries{
-			Name:   formatLegend(v.Metric, query),
-			Tags:   make(map[string]string, len(v.Metric)),
-			Points: make([]tsdb.TimePoint, 0, len(v.Values)),
-		}
-
-		for k, v := range v.Metric {
-			series.Tags[string(k)] = string(v)
-		}
-
-		for _, k := range v.Values {
-			series.Points = append(series.Points, tsdb.NewTimePoint(null.FloatFrom(float64(k.Value)), float64(k.Timestamp.Unix()*1000)))
-		}
-
-		queryRes.Series = append(queryRes.Series, &series)
-	}
-
-	return queryRes, nil
+	return err
 }

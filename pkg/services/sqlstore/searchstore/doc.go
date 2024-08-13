@@ -7,7 +7,7 @@
 // without fuzziness and in a single SQL query.
 //
 // Search queries are a combination of an outer query which Builder
-// creates automatically when calling the Builder.ToSql method and an
+// creates automatically when calling the Builder.ToSQL method and an
 // inner query feeding that which lists the IDs of the dashboards that
 // should be part of the result set. By default search will return all
 // dashboards (behind pagination) but it is possible to dynamically add
@@ -21,11 +21,11 @@
 //
 // Filters will be applied in order with the final result like such:
 //
-//     SELECT id FROM dashboard LEFT OUTER JOIN <FilterLeftJoin...>
-//     WHERE <FilterWhere[0]> AND ... AND <FilterWhere[n]>
-//     GROUP BY <FilterGroupBy...>
-//     ORDER BY <FilterOrderBy...>
-//     LIMIT <limit> OFFSET <(page-1)*limit>;
+//	SELECT id FROM dashboard LEFT OUTER JOIN <FilterLeftJoin...>
+//	WHERE <FilterWhere[0]> AND ... AND <FilterWhere[n]>
+//	GROUP BY <FilterGroupBy...>
+//	ORDER BY <FilterOrderBy...>
+//	LIMIT <limit> OFFSET <(page-1)*limit>;
 //
 // This structure is intended to isolate the filters from each other
 // and implementors are expected to add all the required joins, where

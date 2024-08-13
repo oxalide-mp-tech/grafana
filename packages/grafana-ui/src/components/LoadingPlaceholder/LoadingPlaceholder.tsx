@@ -1,12 +1,34 @@
-import React, { SFC } from 'react';
-import { Icon } from '../Icon/Icon';
+import { css, cx } from '@emotion/css';
+import React, { HTMLAttributes } from 'react';
 
-interface LoadingPlaceholderProps {
-  text: string;
+import { GrafanaTheme2 } from '@grafana/data';
+
+import { useStyles2 } from '../../themes';
+import { Spinner } from '../Spinner/Spinner';
+
+/**
+ * @public
+ */
+export interface LoadingPlaceholderProps extends HTMLAttributes<HTMLDivElement> {
+  text: React.ReactNode;
 }
 
-export const LoadingPlaceholder: SFC<LoadingPlaceholderProps> = ({ text }) => (
-  <div className="gf-form-group">
-    {text} <Icon name="fa fa-spinner" className="fa-spin" />
-  </div>
-);
+/**
+ * @public
+ */
+export const LoadingPlaceholder = ({ text, className, ...rest }: LoadingPlaceholderProps) => {
+  const styles = useStyles2(getStyles);
+  return (
+    <div className={cx(styles.container, className)} {...rest}>
+      {text} <Spinner inline={true} />
+    </div>
+  );
+};
+
+const getStyles = (theme: GrafanaTheme2) => {
+  return {
+    container: css({
+      marginBottom: theme.spacing(4),
+    }),
+  };
+};

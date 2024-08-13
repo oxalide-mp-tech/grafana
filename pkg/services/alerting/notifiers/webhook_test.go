@@ -3,49 +3,49 @@ package notifiers
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/grafana/grafana/pkg/components/simplejson"
-	"github.com/grafana/grafana/pkg/models"
-	. "github.com/smartystreets/goconvey/convey"
+	"github.com/grafana/grafana/pkg/services/alerting/models"
+	encryptionservice "github.com/grafana/grafana/pkg/services/encryption/service"
 )
 
-func TestWebhookNotifier(t *testing.T) {
-	Convey("Webhook notifier tests", t, func() {
-		Convey("Parsing alert notification from settings", func() {
-			Convey("empty settings should return error", func() {
-				json := `{ }`
+func TestWebhookNotifier_parsingFromSettings(t *testing.T) {
+	encryptionService := encryptionservice.SetupTestService(t)
 
-				settingsJSON, _ := simplejson.NewJson([]byte(json))
-				model := &models.AlertNotification{
-					Name:     "ops",
-					Type:     "webhook",
-					Settings: settingsJSON,
-				}
+	t.Run("Empty settings should cause error", func(t *testing.T) {
+		const json = `{}`
 
-				_, err := NewWebHookNotifier(model)
-				So(err, ShouldNotBeNil)
-			})
+		settingsJSON, err := simplejson.NewJson([]byte(json))
+		require.NoError(t, err)
+		model := &models.AlertNotification{
+			Name:     "ops",
+			Type:     "webhook",
+			Settings: settingsJSON,
+		}
 
-			Convey("from settings", func() {
-				json := `
-				{
-          "url": "http://google.com"
-				}`
+		_, err = NewWebHookNotifier(model, encryptionService.GetDecryptedValue, nil)
+		require.Error(t, err)
+	})
 
-				settingsJSON, _ := simplejson.NewJson([]byte(json))
-				model := &models.AlertNotification{
-					Name:     "ops",
-					Type:     "webhook",
-					Settings: settingsJSON,
-				}
+	t.Run("Valid settings should result in a valid notifier", func(t *testing.T) {
+		const json = `{"url": "http://google.com"}`
 
-				not, err := NewWebHookNotifier(model)
-				webhookNotifier := not.(*WebhookNotifier)
+		settingsJSON, err := simplejson.NewJson([]byte(json))
+		require.NoError(t, err)
+		model := &models.AlertNotification{
+			Name:     "ops",
+			Type:     "webhook",
+			Settings: settingsJSON,
+		}
 
-				So(err, ShouldBeNil)
-				So(webhookNotifier.Name, ShouldEqual, "ops")
-				So(webhookNotifier.Type, ShouldEqual, "webhook")
-				So(webhookNotifier.URL, ShouldEqual, "http://google.com")
-			})
-		})
+		not, err := NewWebHookNotifier(model, encryptionService.GetDecryptedValue, nil)
+		require.NoError(t, err)
+		webhookNotifier := not.(*WebhookNotifier)
+
+		assert.Equal(t, "ops", webhookNotifier.Name)
+		assert.Equal(t, "webhook", webhookNotifier.Type)
+		assert.Equal(t, "http://google.com", webhookNotifier.URL)
 	})
 }

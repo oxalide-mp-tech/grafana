@@ -1,14 +1,15 @@
-import { DataTransformerID } from './ids';
-import { DataTransformerInfo } from '../../types/transformations';
-import { OrderFieldsTransformerOptions, orderFieldsTransformer } from './order';
+import { DataFrame, DataTransformerInfo, TransformationApplicabilityLevels } from '../../types';
+
 import { filterFieldsByNameTransformer } from './filterByName';
-import { DataFrame } from '../..';
-import { RenameFieldsTransformerOptions, renameFieldsTransformer } from './rename';
+import { DataTransformerID } from './ids';
+import { orderFieldsTransformer, OrderFieldsTransformerOptions } from './order';
+import { renameFieldsTransformer, RenameFieldsTransformerOptions } from './rename';
 
 export interface OrganizeFieldsTransformerOptions
   extends OrderFieldsTransformerOptions,
     RenameFieldsTransformerOptions {
   excludeByName: Record<string, boolean>;
+  includeByName?: Record<string, boolean>;
 }
 
 export const organizeFieldsTransformer: DataTransformerInfo<OrganizeFieldsTransformerOptions> = {
@@ -19,21 +20,29 @@ export const organizeFieldsTransformer: DataTransformerInfo<OrganizeFieldsTransf
     excludeByName: {},
     indexByName: {},
     renameByName: {},
+    includeByName: {},
   },
-
+  isApplicable: (data: DataFrame[]) => {
+    return data.length > 1
+      ? TransformationApplicabilityLevels.NotPossible
+      : TransformationApplicabilityLevels.Applicable;
+  },
   /**
-   * Return a modified copy of the series.  If the transform is not or should not
+   * Return a modified copy of the series. If the transform is not or should not
    * be applied, just return the input series
    */
-  transformer: (options: OrganizeFieldsTransformerOptions) => {
-    const rename = renameFieldsTransformer.transformer(options);
-    const order = orderFieldsTransformer.transformer(options);
-    const filter = filterFieldsByNameTransformer.transformer({
-      exclude: { names: mapToExcludeArray(options.excludeByName) },
-    });
-
-    return (data: DataFrame[]) => rename(order(filter(data)));
-  },
+  operator: (options, ctx) => (source) =>
+    source.pipe(
+      filterFieldsByNameTransformer.operator(
+        {
+          include: options.includeByName ? { names: mapToExcludeArray(options.includeByName) } : undefined,
+          exclude: { names: mapToExcludeArray(options.excludeByName) },
+        },
+        ctx
+      ),
+      orderFieldsTransformer.operator(options, ctx),
+      renameFieldsTransformer.operator(options, ctx)
+    ),
 };
 
 const mapToExcludeArray = (excludeByName: Record<string, boolean>): string[] => {
@@ -41,5 +50,5 @@ const mapToExcludeArray = (excludeByName: Record<string, boolean>): string[] => 
     return [];
   }
 
-  return Object.keys(excludeByName).filter(name => excludeByName[name]);
+  return Object.keys(excludeByName).filter((name) => excludeByName[name]);
 };

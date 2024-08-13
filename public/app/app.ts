@@ -1,68 +1,111 @@
 import 'symbol-observable';
-import 'core-js/stable';
 import 'regenerator-runtime/runtime';
 
 import 'whatwg-fetch'; // fetch polyfill needed for PhantomJs rendering
-import 'abortcontroller-polyfill/dist/polyfill-patch-fetch'; // fetch polyfill needed for PhantomJs rendering
-// @ts-ignore
-import ttiPolyfill from 'tti-polyfill';
-
 import 'file-saver';
-import 'lodash';
 import 'jquery';
-import 'angular';
-import 'angular-route';
-import 'angular-sanitize';
-import 'angular-native-dragdrop';
-import 'angular-bindonce';
-import 'react';
-import 'react-dom';
-
 import 'vendor/bootstrap/bootstrap';
-import 'vendor/angular-other/angular-strap';
 
-import $ from 'jquery';
-import angular from 'angular';
-import config from 'app/core/config';
-// @ts-ignore ignoring this for now, otherwise we would have to extend _ interface with move
-import _ from 'lodash';
+import 'app/features/all';
+
+import _ from 'lodash'; // eslint-disable-line lodash/import-scope
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+
 import {
-  AppEvents,
+  locationUtil,
+  monacoLanguageRegistry,
   setLocale,
-  setMarkdownOptions,
+  setTimeZoneResolver,
+  setWeekStart,
   standardEditorsRegistry,
   standardFieldConfigEditorRegistry,
   standardTransformersRegistry,
-  setTimeZoneResolver,
 } from '@grafana/data';
-import appEvents from 'app/core/app_events';
-import { checkBrowserCompatibility } from 'app/core/utils/browser';
-import { importPluginModule } from 'app/features/plugins/plugin_loader';
-import { angularModules, coreModule } from 'app/core/core_module';
-import { registerAngularDirectives } from 'app/core/core';
-import { setupAngularRoutes } from 'app/routes/routes';
-import { registerEchoBackend, setEchoSrv } from '@grafana/runtime';
+import {
+  locationService,
+  registerEchoBackend,
+  setBackendSrv,
+  setDataSourceSrv,
+  setEchoSrv,
+  setLocationSrv,
+  setQueryRunnerFactory,
+  setRunRequest,
+  setPluginImportUtils,
+  setPluginExtensionGetter,
+  setAppEvents,
+  type GetPluginExtensions,
+} from '@grafana/runtime';
+import { setPanelDataErrorView } from '@grafana/runtime/src/components/PanelDataErrorView';
+import { setPanelRenderer } from '@grafana/runtime/src/components/PanelRenderer';
+import { setPluginPage } from '@grafana/runtime/src/components/PluginPage';
+import { getScrollbarWidth } from '@grafana/ui';
+import config from 'app/core/config';
+import { arrayMove } from 'app/core/utils/arrayMove';
+import { getStandardTransformers } from 'app/features/transformers/standardTransformers';
+
+import getDefaultMonacoLanguages from '../lib/monaco-languages';
+
+import { AppWrapper } from './AppWrapper';
+import appEvents from './core/app_events';
+import { AppChromeService } from './core/components/AppChrome/AppChromeService';
+import { getAllOptionEditors, getAllStandardFieldConfigs } from './core/components/OptionsUI/registry';
+import { PluginPage } from './core/components/Page/PluginPage';
+import { GrafanaContextType } from './core/context/GrafanaContext';
+import { initIconCache } from './core/icons/iconBundle';
+import { initializeI18n } from './core/internationalization';
+import { interceptLinkClicks } from './core/navigation/patch/interceptLinkClicks';
+import { ModalManager } from './core/services/ModalManager';
+import { NewFrontendAssetsChecker } from './core/services/NewFrontendAssetsChecker';
+import { backendSrv } from './core/services/backend_srv';
+import { contextSrv } from './core/services/context_srv';
 import { Echo } from './core/services/echo/Echo';
 import { reportPerformance } from './core/services/echo/EchoSrv';
 import { PerformanceBackend } from './core/services/echo/backends/PerformanceBackend';
-import 'app/routes/GrafanaCtrl';
-import 'app/features/all';
-import { getStandardFieldConfigs, getStandardOptionEditors, getScrollbarWidth } from '@grafana/ui';
-import { getDefaultVariableAdapters, variableAdapters } from './features/variables/adapters';
+import { ApplicationInsightsBackend } from './core/services/echo/backends/analytics/ApplicationInsightsBackend';
+import { GA4EchoBackend } from './core/services/echo/backends/analytics/GA4Backend';
+import { GAEchoBackend } from './core/services/echo/backends/analytics/GABackend';
+import { RudderstackBackend } from './core/services/echo/backends/analytics/RudderstackBackend';
+import { GrafanaJavascriptAgentBackend } from './core/services/echo/backends/grafana-javascript-agent/GrafanaJavascriptAgentBackend';
+import { KeybindingSrv } from './core/services/keybindingSrv';
+import { startMeasure, stopMeasure } from './core/utils/metrics';
 import { initDevFeatures } from './dev';
-import { getStandardTransformers } from 'app/core/utils/standardTransformers';
+import { initAuthConfig } from './features/auth-config';
+import { getTimeSrv } from './features/dashboard/services/TimeSrv';
+import { initGrafanaLive } from './features/live';
+import { PanelDataErrorView } from './features/panel/components/PanelDataErrorView';
+import { PanelRenderer } from './features/panel/components/PanelRenderer';
+import { DatasourceSrv } from './features/plugins/datasource_srv';
+import { createPluginExtensionRegistry } from './features/plugins/extensions/createPluginExtensionRegistry';
+import { getCoreExtensionConfigurations } from './features/plugins/extensions/getCoreExtensionConfigurations';
+import { getPluginExtensions } from './features/plugins/extensions/getPluginExtensions';
+import { importPanelPlugin, syncGetPanelPlugin } from './features/plugins/importPanelPlugin';
+import { PluginPreloadResult, preloadPlugins } from './features/plugins/pluginPreloader';
+import { QueryRunner } from './features/query/state/QueryRunner';
+import { runRequest } from './features/query/state/runRequest';
+import { initWindowRuntime } from './features/runtime/init';
+import { cleanupOldExpandedFolders } from './features/search/utils';
+import { variableAdapters } from './features/variables/adapters';
+import { createAdHocVariableAdapter } from './features/variables/adhoc/adapter';
+import { createConstantVariableAdapter } from './features/variables/constant/adapter';
+import { createCustomVariableAdapter } from './features/variables/custom/adapter';
+import { createDataSourceVariableAdapter } from './features/variables/datasource/adapter';
+import { getVariablesUrlParams } from './features/variables/getAllVariableValuesForUrl';
+import { createIntervalVariableAdapter } from './features/variables/interval/adapter';
+import { setVariableQueryRunner, VariableQueryRunner } from './features/variables/query/VariableQueryRunner';
+import { createQueryVariableAdapter } from './features/variables/query/adapter';
+import { createSystemVariableAdapter } from './features/variables/system/adapter';
+import { createTextBoxVariableAdapter } from './features/variables/textbox/adapter';
+import { configureStore } from './store/configureStore';
 
-// add move to lodash for backward compatabiltiy
+// add move to lodash for backward compatabilty with plugins
 // @ts-ignore
-_.move = (array: [], fromIndex: number, toIndex: number) => {
-  array.splice(toIndex, 0, array.splice(fromIndex, 1)[0]);
-  return array;
-};
+_.move = arrayMove;
 
 // import symlinked extensions
-const extensionsIndex = (require as any).context('.', true, /extensions\/index.ts/);
-extensionsIndex.keys().forEach((key: any) => {
-  extensionsIndex(key);
+const extensionsIndex = require.context('.', true, /extensions\/index.ts/);
+const extensionsExports = extensionsIndex.keys().map((key) => {
+  return extensionsIndex(key);
 });
 
 if (process.env.NODE_ENV === 'development') {
@@ -70,155 +113,257 @@ if (process.env.NODE_ENV === 'development') {
 }
 
 export class GrafanaApp {
-  registerFunctions: any;
-  ngModuleDependencies: any[];
-  preBootModules: any[] | null;
+  context!: GrafanaContextType;
 
-  constructor() {
-    this.preBootModules = [];
-    this.registerFunctions = {};
-    this.ngModuleDependencies = [];
-  }
+  async init() {
+    try {
+      // Let iframe container know grafana has started loading
+      parent.postMessage('GrafanaAppInit', '*');
 
-  useModule(module: angular.IModule) {
-    if (this.preBootModules) {
-      this.preBootModules.push(module);
-    } else {
-      _.extend(module, this.registerFunctions);
-    }
-    this.ngModuleDependencies.push(module.name);
-    return module;
-  }
+      const initI18nPromise = initializeI18n(config.bootData.user.language);
 
-  init() {
-    const app = angular.module('grafana', []);
+      setBackendSrv(backendSrv);
+      initEchoSrv();
+      initIconCache();
+      // This needs to be done after the `initEchoSrv` since it is being used under the hood.
+      startMeasure('frontend_app_init');
+      addClassIfNoOverlayScrollbar();
+      setLocale(config.bootData.user.locale);
+      setWeekStart(config.bootData.user.weekStart);
+      setPanelRenderer(PanelRenderer);
+      setPluginPage(PluginPage);
+      setPanelDataErrorView(PanelDataErrorView);
+      setLocationSrv(locationService);
+      setTimeZoneResolver(() => config.bootData.user.timezone);
+      initGrafanaLive();
 
-    addClassIfNoOverlayScrollbar();
-    setLocale(config.bootData.user.locale);
-    setTimeZoneResolver(() => config.bootData.user.timezone);
+      initAuthConfig();
 
-    setMarkdownOptions({ sanitize: !config.disableSanitizeHtml });
+      // Expose the app-wide eventbus
+      setAppEvents(appEvents);
 
-    standardEditorsRegistry.setInit(getStandardOptionEditors);
-    standardFieldConfigEditorRegistry.setInit(getStandardFieldConfigs);
-    standardTransformersRegistry.setInit(getStandardTransformers);
-    variableAdapters.setInit(getDefaultVariableAdapters);
+      // We must wait for translations to load because some preloaded store state requires translating
+      await initI18nPromise;
 
-    app.config(
-      (
-        $locationProvider: angular.ILocationProvider,
-        $controllerProvider: angular.IControllerProvider,
-        $compileProvider: angular.ICompileProvider,
-        $filterProvider: angular.IFilterProvider,
-        $httpProvider: angular.IHttpProvider,
-        $provide: angular.auto.IProvideService
-      ) => {
-        // pre assign bindings before constructor calls
-        $compileProvider.preAssignBindingsEnabled(true);
+      // Important that extension reducers are initialized before store
+      addExtensionReducers();
+      configureStore();
+      initExtensions();
 
-        if (config.buildInfo.env !== 'development') {
-          $compileProvider.debugInfoEnabled(false);
-        }
+      standardEditorsRegistry.setInit(getAllOptionEditors);
+      standardFieldConfigEditorRegistry.setInit(getAllStandardFieldConfigs);
+      standardTransformersRegistry.setInit(getStandardTransformers);
+      variableAdapters.setInit(() => [
+        createQueryVariableAdapter(),
+        createCustomVariableAdapter(),
+        createTextBoxVariableAdapter(),
+        createConstantVariableAdapter(),
+        createDataSourceVariableAdapter(),
+        createIntervalVariableAdapter(),
+        createAdHocVariableAdapter(),
+        createSystemVariableAdapter(),
+      ]);
+      monacoLanguageRegistry.setInit(getDefaultMonacoLanguages);
 
-        $httpProvider.useApplyAsync(true);
+      setQueryRunnerFactory(() => new QueryRunner());
+      setVariableQueryRunner(new VariableQueryRunner());
 
-        this.registerFunctions.controller = $controllerProvider.register;
-        this.registerFunctions.directive = $compileProvider.directive;
-        this.registerFunctions.factory = $provide.factory;
-        this.registerFunctions.service = $provide.service;
-        this.registerFunctions.filter = $filterProvider.register;
+      // Provide runRequest implementation to packages, @grafana/scenes in particular
+      setRunRequest(runRequest);
 
-        $provide.decorator('$http', [
-          '$delegate',
-          '$templateCache',
-          ($delegate: any, $templateCache: any) => {
-            const get = $delegate.get;
-            $delegate.get = (url: string, config: any) => {
-              if (url.match(/\.html$/)) {
-                // some template's already exist in the cache
-                if (!$templateCache.get(url)) {
-                  url += '?v=' + new Date().getTime();
-                }
-              }
-              return get(url, config);
-            };
-            return $delegate;
-          },
-        ]);
-      }
-    );
-
-    this.ngModuleDependencies = [
-      'grafana.core',
-      'ngRoute',
-      'ngSanitize',
-      '$strap.directives',
-      'ang-drag-drop',
-      'grafana',
-      'pasvaz.bindonce',
-      'react',
-    ];
-
-    // makes it possible to add dynamic stuff
-    _.each(angularModules, (m: angular.IModule) => {
-      this.useModule(m);
-    });
-
-    // register react angular wrappers
-    coreModule.config(setupAngularRoutes);
-    registerAngularDirectives();
-
-    // disable tool tip animation
-    $.fn.tooltip.defaults.animation = false;
-
-    // bootstrap the app
-    angular.bootstrap(document, this.ngModuleDependencies).invoke(() => {
-      _.each(this.preBootModules, (module: angular.IModule) => {
-        _.extend(module, this.registerFunctions);
+      // Privide plugin import utils to packages, @grafana/scenes in particular
+      setPluginImportUtils({
+        importPanelPlugin,
+        getPanelPluginFromCache: syncGetPanelPlugin,
       });
 
-      this.preBootModules = null;
+      locationUtil.initialize({
+        config,
+        getTimeRangeForUrl: getTimeSrv().timeRangeForUrl,
+        getVariablesUrlParams: getVariablesUrlParams,
+      });
 
-      if (!checkBrowserCompatibility()) {
-        setTimeout(() => {
-          appEvents.emit(AppEvents.alertWarning, [
-            'Your browser is not fully supported',
-            'A newer browser version is recommended',
-          ]);
-        }, 1000);
+      // intercept anchor clicks and forward it to custom history instead of relying on browser's history
+      document.addEventListener('click', interceptLinkClicks);
+
+      // Init DataSourceSrv
+      const dataSourceSrv = new DatasourceSrv();
+      dataSourceSrv.init(config.datasources, config.defaultDatasource);
+      setDataSourceSrv(dataSourceSrv);
+      initWindowRuntime();
+
+      // init modal manager
+      const modalManager = new ModalManager();
+      modalManager.init();
+
+      let preloadResults: PluginPreloadResult[] = [];
+
+      if (contextSrv.user.orgRole !== '') {
+        // Preload selected app plugins
+        preloadResults = await preloadPlugins(config.apps);
       }
-    });
 
-    // Preload selected app plugins
-    for (const modulePath of config.pluginsToPreload) {
-      importPluginModule(modulePath);
+      // Create extension registry out of preloaded plugins and core extensions
+      const extensionRegistry = createPluginExtensionRegistry([
+        { pluginId: 'grafana', extensionConfigs: getCoreExtensionConfigurations() },
+        ...preloadResults,
+      ]);
+
+      // Expose the getPluginExtension function via grafana-runtime
+      const pluginExtensionGetter: GetPluginExtensions = (options) =>
+        getPluginExtensions({ ...options, registry: extensionRegistry });
+
+      setPluginExtensionGetter(pluginExtensionGetter);
+
+      // initialize chrome service
+      const queryParams = locationService.getSearchObject();
+      const chromeService = new AppChromeService();
+      const keybindingsService = new KeybindingSrv(locationService, chromeService);
+      const newAssetsChecker = new NewFrontendAssetsChecker();
+      newAssetsChecker.start();
+
+      // Read initial kiosk mode from url at app startup
+      chromeService.setKioskModeFromUrl(queryParams.kiosk);
+
+      // Clean up old search local storage values
+      try {
+        cleanupOldExpandedFolders();
+      } catch (err) {
+        console.warn('Failed to clean up old expanded folders', err);
+      }
+
+      this.context = {
+        backend: backendSrv,
+        location: locationService,
+        chrome: chromeService,
+        keybindings: keybindingsService,
+        newAssetsChecker,
+        config,
+      };
+
+      const root = createRoot(document.getElementById('reactRoot')!);
+      root.render(
+        React.createElement(AppWrapper, {
+          app: this,
+        })
+      );
+    } catch (error) {
+      console.error('Failed to start Grafana', error);
+      window.__grafana_load_failed();
+    } finally {
+      stopMeasure('frontend_app_init');
     }
   }
+}
 
-  initEchoSrv() {
-    setEchoSrv(new Echo({ debug: process.env.NODE_ENV === 'development' }));
+function addExtensionReducers() {
+  if (extensionsExports.length > 0) {
+    extensionsExports[0].addExtensionReducers();
+  }
+}
 
-    ttiPolyfill.getFirstConsistentlyInteractive().then((tti: any) => {
-      // Collecting paint metrics first
-      const paintMetrics = performance && performance.getEntriesByType ? performance.getEntriesByType('paint') : [];
+function initExtensions() {
+  if (extensionsExports.length > 0) {
+    extensionsExports[0].init();
+  }
+}
 
-      for (const metric of paintMetrics) {
-        reportPerformance(metric.name, Math.round(metric.startTime + metric.duration));
-      }
-      reportPerformance('tti', tti);
-    });
+function initEchoSrv() {
+  setEchoSrv(new Echo({ debug: process.env.NODE_ENV === 'development' }));
 
+  window.addEventListener('load', (e) => {
+    const loadMetricName = 'frontend_boot_load_time_seconds';
+    // Metrics below are marked in public/views/index.html
+    const jsLoadMetricName = 'frontend_boot_js_done_time_seconds';
+    const cssLoadMetricName = 'frontend_boot_css_time_seconds';
+
+    if (performance) {
+      performance.mark(loadMetricName);
+      reportMetricPerformanceMark('first-paint', 'frontend_boot_', '_time_seconds');
+      reportMetricPerformanceMark('first-contentful-paint', 'frontend_boot_', '_time_seconds');
+      reportMetricPerformanceMark(loadMetricName);
+      reportMetricPerformanceMark(jsLoadMetricName);
+      reportMetricPerformanceMark(cssLoadMetricName);
+    }
+  });
+
+  if (contextSrv.user.orgRole !== '') {
     registerEchoBackend(new PerformanceBackend({}));
+  }
 
-    window.addEventListener('DOMContentLoaded', () => {
-      reportPerformance('dcl', Math.round(performance.now()));
-    });
+  if (config.grafanaJavascriptAgent.enabled) {
+    registerEchoBackend(
+      new GrafanaJavascriptAgentBackend({
+        ...config.grafanaJavascriptAgent,
+        app: {
+          version: config.buildInfo.version,
+          environment: config.buildInfo.env,
+        },
+        buildInfo: config.buildInfo,
+        user: {
+          id: String(config.bootData.user?.id),
+          email: config.bootData.user?.email,
+        },
+      })
+    );
+  }
+
+  if (config.googleAnalyticsId) {
+    registerEchoBackend(
+      new GAEchoBackend({
+        googleAnalyticsId: config.googleAnalyticsId,
+      })
+    );
+  }
+
+  if (config.googleAnalytics4Id) {
+    registerEchoBackend(
+      new GA4EchoBackend({
+        googleAnalyticsId: config.googleAnalytics4Id,
+        googleAnalytics4SendManualPageViews: config.googleAnalytics4SendManualPageViews,
+      })
+    );
+  }
+
+  if (config.rudderstackWriteKey && config.rudderstackDataPlaneUrl) {
+    registerEchoBackend(
+      new RudderstackBackend({
+        writeKey: config.rudderstackWriteKey,
+        dataPlaneUrl: config.rudderstackDataPlaneUrl,
+        user: config.bootData.user,
+        sdkUrl: config.rudderstackSdkUrl,
+        configUrl: config.rudderstackConfigUrl,
+        integrationsUrl: config.rudderstackIntegrationsUrl,
+        buildInfo: config.buildInfo,
+      })
+    );
+  }
+
+  if (config.applicationInsightsConnectionString) {
+    registerEchoBackend(
+      new ApplicationInsightsBackend({
+        connectionString: config.applicationInsightsConnectionString,
+        endpointUrl: config.applicationInsightsEndpointUrl,
+      })
+    );
   }
 }
 
 function addClassIfNoOverlayScrollbar() {
   if (getScrollbarWidth() > 0) {
     document.body.classList.add('no-overlay-scrollbar');
+  }
+}
+
+/**
+ * Report when a metric of a given name was marked during the document lifecycle. Works for markers with no duration,
+ * like PerformanceMark or PerformancePaintTiming (e.g. created with performance.mark, or first-contentful-paint)
+ */
+function reportMetricPerformanceMark(metricName: string, prefix = '', suffix = ''): void {
+  const metric = _.first(performance.getEntriesByName(metricName));
+  if (metric) {
+    const metricName = metric.name.replace(/-/g, '_');
+    reportPerformance(`${prefix}${metricName}${suffix}`, Math.round(metric.startTime) / 1000);
   }
 }
 

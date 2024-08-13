@@ -1,12 +1,17 @@
-import { DataSourceInstanceSettings, dateTime, AnnotationQueryRequest } from '@grafana/data';
-
+import { AnnotationQueryRequest, DataSourceInstanceSettings, dateTime } from '@grafana/data';
 import { backendSrv } from 'app/core/services/backend_srv'; // will use the version in __mocks__
+
 import { GrafanaDatasource } from './datasource';
-import { GrafanaQuery, GrafanaAnnotationQuery, GrafanaAnnotationType } from './types';
+import { GrafanaAnnotationQuery, GrafanaAnnotationType, GrafanaQuery } from './types';
 
 jest.mock('@grafana/runtime', () => ({
-  ...((jest.requireActual('@grafana/runtime') as unknown) as object),
+  ...jest.requireActual('@grafana/runtime'),
   getBackendSrv: () => backendSrv,
+  getTemplateSrv: () => ({
+    replace: (val: string) => {
+      return val.replace('$var2', 'replaced__delimiter__replaced2').replace('$var', 'replaced');
+    },
+  }),
 }));
 
 describe('grafana data source', () => {
@@ -20,25 +25,19 @@ describe('grafana data source', () => {
     let calledBackendSrvParams: any;
     let ds: GrafanaDatasource;
     beforeEach(() => {
-      getMock.mockImplementation((url: string, options: any) => {
+      getMock.mockImplementation((url, options) => {
         calledBackendSrvParams = options;
         return Promise.resolve([]);
       });
 
-      const templateSrvStub = {
-        replace: (val: string) => {
-          return val.replace('$var2', 'replaced__delimiter__replaced2').replace('$var', 'replaced');
-        },
-      };
-
-      ds = new GrafanaDatasource({} as DataSourceInstanceSettings, templateSrvStub as any);
+      ds = new GrafanaDatasource({} as DataSourceInstanceSettings);
     });
 
     describe('with tags that have template variables', () => {
       const options = setupAnnotationQueryOptions({ tags: ['tag1:$var'] });
 
       beforeEach(() => {
-        return ds.annotationQuery(options);
+        return ds.getAnnotations(options);
       });
 
       it('should interpolate template variables in tags in query options', () => {
@@ -50,7 +49,7 @@ describe('grafana data source', () => {
       const options = setupAnnotationQueryOptions({ tags: ['$var2'] });
 
       beforeEach(() => {
-        return ds.annotationQuery(options);
+        return ds.getAnnotations(options);
       });
 
       it('should interpolate template variables in tags in query options', () => {
@@ -65,11 +64,11 @@ describe('grafana data source', () => {
           type: GrafanaAnnotationType.Dashboard,
           tags: ['tag1'],
         },
-        { id: 1 }
+        { uid: 'DSNdW0gVk' }
       );
 
       beforeEach(() => {
-        return ds.annotationQuery(options);
+        return ds.getAnnotations(options);
       });
 
       it('should remove tags from query options', () => {
@@ -79,14 +78,16 @@ describe('grafana data source', () => {
   });
 });
 
-function setupAnnotationQueryOptions(annotation: Partial<GrafanaAnnotationQuery>, dashboard?: { id: number }) {
-  return ({
-    annotation,
+function setupAnnotationQueryOptions(annotation: Partial<GrafanaAnnotationQuery>, dashboard?: { uid: string }) {
+  return {
+    annotation: {
+      target: annotation,
+    },
     dashboard,
     range: {
       from: dateTime(1432288354),
       to: dateTime(1432288401),
     },
     rangeRaw: { from: 'now-24h', to: 'now' },
-  } as unknown) as AnnotationQueryRequest<GrafanaQuery>;
+  } as unknown as AnnotationQueryRequest<GrafanaQuery>;
 }

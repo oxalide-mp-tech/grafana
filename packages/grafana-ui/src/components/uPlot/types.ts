@@ -1,64 +1,60 @@
 import React from 'react';
-import uPlot from 'uplot';
-import { DataFrame, FieldColor, TimeRange, TimeZone } from '@grafana/data';
+import uPlot, { Options, AlignedData } from 'uplot';
 
-export type NullValuesMode = 'null' | 'connected' | 'asZero';
+import { UPlotConfigBuilder } from './config/UPlotConfigBuilder';
 
-export enum MicroPlotAxisSide {
-  top = 0,
-  right = 1,
-  bottom = 2,
-  left = 3,
-}
+/**
+ * @internal -- not a public API
+ */
+export const FIXED_UNIT = '__fixed';
 
-interface AxisConfig {
-  label: string;
-  side: number;
-  grid: boolean;
-  width: number;
-}
-
-interface LineConfig {
-  show: boolean;
-  width: number;
-  color: FieldColor;
-}
-interface PointConfig {
-  show: boolean;
-  radius: number;
-}
-interface BarsConfig {
-  show: boolean;
-}
-interface FillConfig {
-  alpha: number;
-}
-
-export interface GraphCustomFieldConfig {
-  axis: AxisConfig;
-  line: LineConfig;
-  points: PointConfig;
-  bars: BarsConfig;
-  fill: FillConfig;
-  nullValues: NullValuesMode;
-}
-
-export type PlotPlugin = {
-  id: string;
-  /** can mutate provided opts as necessary */
-  opts?: (self: uPlot, opts: uPlot.Options) => void;
-  hooks: uPlot.PluginHooks;
-};
+export type PlotConfig = Pick<
+  Options,
+  'mode' | 'series' | 'scales' | 'axes' | 'cursor' | 'bands' | 'hooks' | 'select' | 'tzDate' | 'padding'
+>;
 
 export interface PlotPluginProps {
   id: string;
 }
 
+export type FacetValues = any[];
+export type FacetSeries = FacetValues[];
+export type FacetedData = [_: null, ...series: FacetSeries];
+
 export interface PlotProps {
-  data: DataFrame;
+  data: AlignedData | FacetedData;
   width: number;
   height: number;
-  timeRange: TimeRange;
-  timeZone: TimeZone;
-  children: React.ReactNode[];
+  config: UPlotConfigBuilder;
+  children?: React.ReactNode;
+  // Reference to uPlot instance
+  plotRef?: (u: uPlot) => void;
+}
+
+export abstract class PlotConfigBuilder<P, T> {
+  constructor(public props: P) {}
+  abstract getConfig(): T;
+}
+
+/**
+ * @alpha
+ */
+export type PlotTooltipInterpolator = (
+  updateActiveSeriesIdx: (sIdx: number | null) => void,
+  updateActiveDatapointIdx: (dIdx: number | null) => void,
+  updateTooltipPosition: (clear?: boolean) => void,
+  u: uPlot
+) => void;
+
+export interface PlotSelection {
+  min: number;
+  max: number;
+
+  // selection bounding box, relative to canvas
+  bbox: {
+    top: number;
+    left: number;
+    width: number;
+    height: number;
+  };
 }

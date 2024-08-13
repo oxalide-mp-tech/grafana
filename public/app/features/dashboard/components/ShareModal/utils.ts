@@ -1,41 +1,58 @@
+import { dateTime, locationUtil, TimeRange, urlUtil, rangeUtil } from '@grafana/data';
 import { config } from '@grafana/runtime';
+import { createShortLink } from 'app/core/utils/shortLinks';
 import { getTimeSrv } from 'app/features/dashboard/services/TimeSrv';
-import { getTemplateSrv } from 'app/features/templating/template_srv';
-import { PanelModel, dateTime, urlUtil } from '@grafana/data';
 
-export function buildParams(
-  useCurrentTimeRange: boolean,
-  includeTemplateVars: boolean,
-  selectedTheme?: string,
-  panel?: PanelModel
-) {
-  const params = urlUtil.getUrlSearchParams();
+import { PanelModel } from '../../state';
 
-  const range = getTimeSrv().timeRange();
-  params.from = range.from.valueOf();
-  params.to = range.to.valueOf();
-  params.orgId = config.bootData.user.orgId;
+export interface BuildParamsArgs {
+  useCurrentTimeRange: boolean;
+  selectedTheme?: string;
+  panel?: { timeFrom?: string; id: number };
+  search?: string;
+  range?: TimeRange;
+  orgId?: number;
+}
+
+export function buildParams({
+  useCurrentTimeRange,
+  selectedTheme,
+  panel,
+  search = window.location.search,
+  range = getTimeSrv().timeRange(),
+  orgId = config.bootData.user.orgId,
+}: BuildParamsArgs): URLSearchParams {
+  const searchParams = new URLSearchParams(search);
+  const relative = panel?.timeFrom;
+
+  // Use panel's relative time if it's set
+  if (relative) {
+    const { from, to } = rangeUtil.describeTextRange(relative);
+    searchParams.set('from', from);
+    searchParams.set('to', to);
+  } else {
+    searchParams.set('from', String(range.from.valueOf()));
+    searchParams.set('to', String(range.to.valueOf()));
+  }
+  searchParams.set('orgId', String(orgId));
 
   if (!useCurrentTimeRange) {
-    delete params.from;
-    delete params.to;
-  }
-
-  if (includeTemplateVars) {
-    getTemplateSrv().fillVariableValuesForUrl(params);
+    searchParams.delete('from');
+    searchParams.delete('to');
   }
 
   if (selectedTheme !== 'current') {
-    params.theme = selectedTheme;
+    searchParams.set('theme', selectedTheme!);
   }
 
-  if (panel && !params.editPanel) {
-    params.viewPanel = panel.id;
-  } else {
-    delete params.viewPanel;
+  if (panel && !searchParams.has('editPanel')) {
+    searchParams.set('viewPanel', String(panel.id));
   }
 
-  return params;
+  // Token is unique to the authenticated identity and should not be shared with the URL,
+  // so we are stripping it from the query params as a safety measure.
+  searchParams.delete('auth_token');
+  return searchParams;
 }
 
 export function buildBaseUrl() {
@@ -49,45 +66,55 @@ export function buildBaseUrl() {
   return baseUrl;
 }
 
-export function buildShareUrl(
+export async function buildShareUrl(
   useCurrentTimeRange: boolean,
-  includeTemplateVars: boolean,
   selectedTheme?: string,
-  panel?: PanelModel
+  panel?: PanelModel,
+  shortenUrl?: boolean
 ) {
   const baseUrl = buildBaseUrl();
-  const params = buildParams(useCurrentTimeRange, includeTemplateVars, selectedTheme, panel);
-
-  return urlUtil.appendQueryToUrl(baseUrl, urlUtil.toUrlParams(params));
+  const params = buildParams({ useCurrentTimeRange, selectedTheme, panel });
+  const shareUrl = urlUtil.appendQueryToUrl(baseUrl, params.toString());
+  if (shortenUrl) {
+    return await createShortLink(shareUrl);
+  }
+  return shareUrl;
 }
 
 export function buildSoloUrl(
   useCurrentTimeRange: boolean,
-  includeTemplateVars: boolean,
+  dashboardUid: string,
   selectedTheme?: string,
-  panel?: PanelModel
+  panel?: { timeFrom?: string; id: number },
+  range?: TimeRange
 ) {
   const baseUrl = buildBaseUrl();
-  const params = buildParams(useCurrentTimeRange, includeTemplateVars, selectedTheme, panel);
+  const params = buildParams({ useCurrentTimeRange, selectedTheme, panel, range });
 
   let soloUrl = baseUrl.replace(config.appSubUrl + '/dashboard/', config.appSubUrl + '/dashboard-solo/');
   soloUrl = soloUrl.replace(config.appSubUrl + '/d/', config.appSubUrl + '/d-solo/');
 
-  params.panelId = params.editPanel ?? params.viewPanel;
-  delete params.editPanel;
-  delete params.viewPanel;
+  // For handling the case when default_home_dashboard_path is set in the grafana config
+  const strippedUrl = locationUtil.stripBaseFromUrl(baseUrl);
+  if (strippedUrl === '/') {
+    soloUrl = `${config.appUrl}d-solo/${dashboardUid}`;
+  }
 
-  return urlUtil.appendQueryToUrl(soloUrl, urlUtil.toUrlParams(params));
+  const panelId = params.get('editPanel') ?? params.get('viewPanel') ?? '';
+  params.set('panelId', panelId);
+  params.delete('editPanel');
+  params.delete('viewPanel');
+
+  return urlUtil.appendQueryToUrl(soloUrl, params.toString());
 }
 
 export function buildImageUrl(
   useCurrentTimeRange: boolean,
-  includeTemplateVars: boolean,
+  dashboardUid: string,
   selectedTheme?: string,
   panel?: PanelModel
 ) {
-  let soloUrl = buildSoloUrl(useCurrentTimeRange, includeTemplateVars, selectedTheme, panel);
-
+  let soloUrl = buildSoloUrl(useCurrentTimeRange, dashboardUid, selectedTheme, panel);
   let imageUrl = soloUrl.replace(config.appSubUrl + '/dashboard-solo/', config.appSubUrl + '/render/dashboard-solo/');
   imageUrl = imageUrl.replace(config.appSubUrl + '/d-solo/', config.appSubUrl + '/render/d-solo/');
   imageUrl += '&width=1000&height=500' + getLocalTimeZone();
@@ -96,23 +123,24 @@ export function buildImageUrl(
 
 export function buildIframeHtml(
   useCurrentTimeRange: boolean,
-  includeTemplateVars: boolean,
+  dashboardUid: string,
   selectedTheme?: string,
-  panel?: PanelModel
+  panel?: { timeFrom?: string; id: number },
+  range?: TimeRange
 ) {
-  let soloUrl = buildSoloUrl(useCurrentTimeRange, includeTemplateVars, selectedTheme, panel);
-  return '<iframe src="' + soloUrl + '" width="450" height="200" frameborder="0"></iframe>';
+  let soloUrl = buildSoloUrl(useCurrentTimeRange, dashboardUid, selectedTheme, panel, range);
+  return `<iframe src="${soloUrl}" width="450" height="200" frameborder="0"></iframe>`;
 }
 
 export function getLocalTimeZone() {
   const utcOffset = '&tz=UTC' + encodeURIComponent(dateTime().format('Z'));
 
   // Older browser does not the internationalization API
-  if (!(window as any).Intl) {
+  if (!window.Intl) {
     return utcOffset;
   }
 
-  const dateFormat = (window as any).Intl.DateTimeFormat();
+  const dateFormat = window.Intl.DateTimeFormat();
   if (!dateFormat.resolvedOptions) {
     return utcOffset;
   }
@@ -124,3 +152,16 @@ export function getLocalTimeZone() {
 
   return '&tz=' + encodeURIComponent(options.timeZone);
 }
+
+export const shareDashboardType: {
+  [key: string]: string;
+} = {
+  link: 'link',
+  snapshot: 'snapshot',
+  export: 'export',
+  embed: 'embed',
+  libraryPanel: 'library_panel',
+  pdf: 'pdf',
+  report: 'report',
+  publicDashboard: 'public_dashboard',
+};

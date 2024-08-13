@@ -75,26 +75,6 @@ func addDataSourceMigration(mg *Migrator) {
 	// add v2 indíces
 	addTableIndicesMigrations(mg, "v2", tableV2)
 
-	//------- copy data from v1 to v2 -------------------
-	mg.AddMigration("copy data_source v1 to v2", NewCopyTableDataMigration("data_source", "data_source_v1", map[string]string{
-		"id":                  "id",
-		"org_id":              "account_id",
-		"version":             "version",
-		"type":                "type",
-		"name":                "name",
-		"access":              "access",
-		"url":                 "url",
-		"user":                "user",
-		"password":            "password",
-		"database":            "database",
-		"basic_auth":          "basic_auth",
-		"basic_auth_user":     "basic_auth_user",
-		"basic_auth_password": "basic_auth_password",
-		"is_default":          "is_default",
-		"created":             "created",
-		"updated":             "updated",
-	}))
-
 	mg.AddMigration("Drop old table data_source_v1 #2", NewDropTableMigration("data_source_v1"))
 
 	// add column to activate withCredentials option
@@ -122,17 +102,17 @@ func addDataSourceMigration(mg *Migrator) {
 	}))
 
 	const setVersionToOneWhereZero = `UPDATE data_source SET version = 1 WHERE version = 0`
-	mg.AddMigration("Update initial version to 1", NewRawSqlMigration(setVersionToOneWhereZero))
+	mg.AddMigration("Update initial version to 1", NewRawSQLMigration(setVersionToOneWhereZero))
 
 	mg.AddMigration("Add read_only data column", NewAddColumnMigration(tableV2, &Column{
 		Name: "read_only", Type: DB_Bool, Nullable: true,
 	}))
 
 	const migrateLoggingToLoki = `UPDATE data_source SET type = 'loki' WHERE type = 'logging'`
-	mg.AddMigration("Migrate logging ds to loki ds", NewRawSqlMigration(migrateLoggingToLoki))
+	mg.AddMigration("Migrate logging ds to loki ds", NewRawSQLMigration(migrateLoggingToLoki))
 
 	const setEmptyJSONWhereNullJSON = `UPDATE data_source SET json_data = '{}' WHERE json_data is null`
-	mg.AddMigration("Update json_data with nulls", NewRawSqlMigration(setEmptyJSONWhereNullJSON))
+	mg.AddMigration("Update json_data with nulls", NewRawSQLMigration(setEmptyJSONWhereNullJSON))
 
 	// add column uid for linking
 	mg.AddMigration("Add uid column", NewAddColumnMigration(tableV2, &Column{
@@ -142,8 +122,8 @@ func addDataSourceMigration(mg *Migrator) {
 	// Initialize as id as that is unique already
 	mg.AddMigration(
 		"Update uid value",
-		NewRawSqlMigration("").
-			Sqlite("UPDATE data_source SET uid=printf('%09d',id);").
+		NewRawSQLMigration("").
+			SQLite("UPDATE data_source SET uid=printf('%09d',id);").
 			Postgres("UPDATE data_source SET uid=lpad('' || id::text,9,'0');").
 			Mysql("UPDATE data_source SET uid=lpad(id,9,'0');"),
 	)
@@ -151,4 +131,7 @@ func addDataSourceMigration(mg *Migrator) {
 	mg.AddMigration("Add unique index datasource_org_id_uid", NewAddIndexMigration(tableV2, &Index{
 		Cols: []string{"org_id", "uid"}, Type: UniqueIndex,
 	}))
+
+	mg.AddMigration("add unique index datasource_org_id_is_default", NewAddIndexMigration(tableV2, &Index{
+		Cols: []string{"org_id", "is_default"}}))
 }

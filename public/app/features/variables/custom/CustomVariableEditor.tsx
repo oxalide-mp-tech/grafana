@@ -1,11 +1,16 @@
-import React, { ChangeEvent, FocusEvent, PureComponent } from 'react';
-import { CustomVariableModel, VariableWithMultiSupport } from '../types';
-import { SelectionOptionsEditor } from '../editor/SelectionOptionsEditor';
-import { OnPropChangeArguments, VariableEditorProps } from '../editor/types';
-import { connectWithStore } from 'app/core/utils/connectWithReduxStore';
+import React, { FormEvent, PureComponent } from 'react';
 import { MapDispatchToProps, MapStateToProps } from 'react-redux';
+
+import { selectors } from '@grafana/e2e-selectors';
+import { connectWithStore } from 'app/core/utils/connectWithReduxStore';
 import { StoreState } from 'app/types';
+
+import { SelectionOptionsEditor } from '../editor/SelectionOptionsEditor';
+import { VariableLegend } from '../editor/VariableLegend';
+import { VariableTextAreaField } from '../editor/VariableTextAreaField';
+import { OnPropChangeArguments, VariableEditorProps } from '../editor/types';
 import { changeVariableMultiValue } from '../state/actions';
+import { CustomVariableModel, VariableWithMultiSupport } from '../types';
 
 interface OwnProps extends VariableEditorProps<CustomVariableModel> {}
 
@@ -18,10 +23,10 @@ interface DispatchProps {
 export type Props = OwnProps & ConnectedProps & DispatchProps;
 
 class CustomVariableEditorUnconnected extends PureComponent<Props> {
-  onChange = (event: ChangeEvent<HTMLInputElement>) => {
+  onChange = (event: FormEvent<HTMLTextAreaElement>) => {
     this.props.onPropChange({
       propName: 'query',
-      propValue: event.target.value,
+      propValue: event.currentTarget.value,
     });
   };
 
@@ -29,10 +34,10 @@ class CustomVariableEditorUnconnected extends PureComponent<Props> {
     this.props.onPropChange({ propName, propValue, updateOptions: true });
   };
 
-  onBlur = (event: FocusEvent<HTMLInputElement>) => {
+  onBlur = (event: FormEvent<HTMLTextAreaElement>) => {
     this.props.onPropChange({
       propName: 'query',
-      propValue: event.target.value,
+      propValue: event.currentTarget.value,
       updateOptions: true,
     });
   };
@@ -40,22 +45,19 @@ class CustomVariableEditorUnconnected extends PureComponent<Props> {
   render() {
     return (
       <>
-        <div className="gf-form-group">
-          <h5 className="section-heading">Custom Options</h5>
-          <div className="gf-form">
-            <span className="gf-form-label width-14">Values separated by comma</span>
-            <input
-              type="text"
-              className="gf-form-input"
-              value={this.props.variable.query}
-              onChange={this.onChange}
-              onBlur={this.onBlur}
-              placeholder="1, 10, mykey : myvalue, myvalue, escaped\,value"
-              required
-              aria-label="Variable editor Form Custom Query field"
-            />
-          </div>
-        </div>
+        <VariableLegend>Custom options</VariableLegend>
+
+        <VariableTextAreaField
+          name="Values separated by comma"
+          value={this.props.variable.query}
+          placeholder="1, 10, mykey : myvalue, myvalue, escaped\,value"
+          onChange={this.onChange}
+          onBlur={this.onBlur}
+          required
+          width={52}
+          testId={selectors.pages.Dashboard.Settings.Variables.Edit.CustomVariable.customValueInput}
+        />
+        <VariableLegend>Selection options</VariableLegend>
         <SelectionOptionsEditor
           variable={this.props.variable}
           onPropChange={this.onSelectionOptionsChange}

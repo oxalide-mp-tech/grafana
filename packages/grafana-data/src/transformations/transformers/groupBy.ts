@@ -1,11 +1,12 @@
-import { DataTransformerID } from './ids';
-import { DataFrame, FieldType, Field } from '../../types/dataFrame';
-import { DataTransformerInfo } from '../../types/transformations';
-import { getFieldDisplayName } from '../../field/fieldState';
-import { ArrayVector } from '../../vector/ArrayVector';
+import { map } from 'rxjs/operators';
+
 import { guessFieldTypeForField } from '../../dataframe/processDataFrame';
+import { getFieldDisplayName } from '../../field/fieldState';
+import { DataFrame, Field, FieldType, TransformationApplicabilityLevels } from '../../types';
+import { DataTransformerInfo } from '../../types/transformations';
 import { reduceField, ReducerID } from '../fieldReducer';
-import { MutableField } from '../../dataframe/MutableDataFrame';
+
+import { DataTransformerID } from './ids';
 
 export enum GroupByOperationID {
   aggregate = 'aggregate',
@@ -24,136 +25,162 @@ export interface GroupByTransformerOptions {
 export const groupByTransformer: DataTransformerInfo<GroupByTransformerOptions> = {
   id: DataTransformerID.groupBy,
   name: 'Group by',
-  description: 'Group the data by a field values then process calculations for each group',
+  description: 'Group the data by a field values then process calculations for each group.',
   defaultOptions: {
     fields: {},
   },
+  isApplicable: (data: DataFrame[]) => {
+    let maxFields = 0;
 
+    // Group by needs at least two fields
+    // a field to group on and a field to aggregate
+    // We make sure that at least one frame has at
+    // least two fields
+    for (const frame of data) {
+      if (frame.fields.length > maxFields) {
+        maxFields = frame.fields.length;
+      }
+    }
+
+    return maxFields >= 2
+      ? TransformationApplicabilityLevels.Applicable
+      : TransformationApplicabilityLevels.NotApplicable;
+  },
+  isApplicableDescription: (data: DataFrame[]) => {
+    let maxFields = 0;
+
+    for (const frame of data) {
+      if (frame.fields.length > maxFields) {
+        maxFields = frame.fields.length;
+      }
+    }
+
+    return `The Group by transformation requires a series with at least two fields to work. The maximum number of fields found on a series is ${maxFields}`;
+  },
   /**
-   * Return a modified copy of the series.  If the transform is not or should not
+   * Return a modified copy of the series. If the transform is not or should not
    * be applied, just return the input series
    */
-  transformer: (options: GroupByTransformerOptions) => {
-    const hasValidConfig = Object.keys(options.fields).find(
-      name => options.fields[name].operation === GroupByOperationID.groupBy
-    );
+  operator: (options) => (source) =>
+    source.pipe(
+      map((data) => {
+        const hasValidConfig = Object.keys(options.fields).find(
+          (name) => options.fields[name].operation === GroupByOperationID.groupBy
+        );
 
-    return (data: DataFrame[]) => {
-      if (!hasValidConfig) {
-        return data;
-      }
-
-      const processed: DataFrame[] = [];
-
-      for (const frame of data) {
-        const groupByFields: Field[] = [];
-
-        for (const field of frame.fields) {
-          if (shouldGroupOnField(field, options)) {
-            groupByFields.push(field);
-          }
+        if (!hasValidConfig) {
+          return data;
         }
 
-        if (groupByFields.length === 0) {
-          continue; // No group by field in this frame, ignore the frame
-        }
+        const processed: DataFrame[] = [];
 
-        // Group the values by fields and groups so we can get all values for a
-        // group for a given field.
-        const valuesByGroupKey: Record<string, Record<string, MutableField>> = {};
-        for (let rowIndex = 0; rowIndex < frame.length; rowIndex++) {
-          const groupKey = String(groupByFields.map(field => field.values.get(rowIndex)));
-          const valuesByField = valuesByGroupKey[groupKey] ?? {};
+        for (const frame of data) {
+          const groupByFields: Field[] = [];
 
-          if (!valuesByGroupKey[groupKey]) {
-            valuesByGroupKey[groupKey] = valuesByField;
+          for (const field of frame.fields) {
+            if (shouldGroupOnField(field, options)) {
+              groupByFields.push(field);
+            }
           }
 
-          for (let field of frame.fields) {
-            const fieldName = getFieldDisplayName(field);
+          if (groupByFields.length === 0) {
+            continue; // No group by field in this frame, ignore the frame
+          }
 
-            if (!valuesByField[fieldName]) {
-              valuesByField[fieldName] = {
-                name: fieldName,
-                type: field.type,
-                config: { ...field.config },
-                values: new ArrayVector(),
-              };
+          // Group the values by fields and groups so we can get all values for a
+          // group for a given field.
+          const valuesByGroupKey = new Map<string, Record<string, Field>>();
+          for (let rowIndex = 0; rowIndex < frame.length; rowIndex++) {
+            const groupKey = String(groupByFields.map((field) => field.values[rowIndex]));
+            const valuesByField = valuesByGroupKey.get(groupKey) ?? {};
+
+            if (!valuesByGroupKey.has(groupKey)) {
+              valuesByGroupKey.set(groupKey, valuesByField);
             }
 
-            valuesByField[fieldName].values.add(field.values.get(rowIndex));
-          }
-        }
+            for (let field of frame.fields) {
+              const fieldName = getFieldDisplayName(field);
 
-        const fields: Field[] = [];
-        const groupKeys = Object.keys(valuesByGroupKey);
+              if (!valuesByField[fieldName]) {
+                valuesByField[fieldName] = {
+                  name: fieldName,
+                  type: field.type,
+                  config: { ...field.config },
+                  values: [],
+                };
+              }
 
-        for (const field of groupByFields) {
-          const values = new ArrayVector();
-          const fieldName = getFieldDisplayName(field);
-
-          for (let key of groupKeys) {
-            const valuesByField = valuesByGroupKey[key];
-            values.add(valuesByField[fieldName].values.get(0));
-          }
-
-          fields.push({
-            name: field.name,
-            type: field.type,
-            config: {
-              ...field.config,
-            },
-            values: values,
-          });
-        }
-
-        // Then for each calculations configured, compute and add a new field (column)
-        for (const field of frame.fields) {
-          if (!shouldCalculateField(field, options)) {
-            continue;
+              valuesByField[fieldName].values.push(field.values[rowIndex]);
+            }
           }
 
-          const fieldName = getFieldDisplayName(field);
-          const aggregations = options.fields[fieldName].aggregations;
-          const valuesByAggregation: Record<string, any[]> = {};
+          const fields: Field[] = [];
 
-          for (const groupKey of groupKeys) {
-            const fieldWithValuesForGroup = valuesByGroupKey[groupKey][fieldName];
-            const results = reduceField({
-              field: fieldWithValuesForGroup,
-              reducers: aggregations,
+          for (const field of groupByFields) {
+            const values: unknown[] = [];
+            const fieldName = getFieldDisplayName(field);
+
+            valuesByGroupKey.forEach((value) => {
+              values.push(value[fieldName].values[0]);
+            });
+
+            fields.push({
+              name: field.name,
+              type: field.type,
+              config: {
+                ...field.config,
+              },
+              values: values,
+            });
+          }
+
+          // Then for each calculations configured, compute and add a new field (column)
+          for (const field of frame.fields) {
+            if (!shouldCalculateField(field, options)) {
+              continue;
+            }
+
+            const fieldName = getFieldDisplayName(field);
+            const aggregations = options.fields[fieldName].aggregations;
+            const valuesByAggregation: Record<string, unknown[]> = {};
+
+            valuesByGroupKey.forEach((value) => {
+              const fieldWithValuesForGroup = value[fieldName];
+              const results = reduceField({
+                field: fieldWithValuesForGroup,
+                reducers: aggregations,
+              });
+
+              for (const aggregation of aggregations) {
+                if (!Array.isArray(valuesByAggregation[aggregation])) {
+                  valuesByAggregation[aggregation] = [];
+                }
+                valuesByAggregation[aggregation].push(results[aggregation]);
+              }
             });
 
             for (const aggregation of aggregations) {
-              if (!Array.isArray(valuesByAggregation[aggregation])) {
-                valuesByAggregation[aggregation] = [];
-              }
-              valuesByAggregation[aggregation].push(results[aggregation]);
+              const aggregationField: Field = {
+                name: `${fieldName} (${aggregation})`,
+                values: valuesByAggregation[aggregation] ?? [],
+                type: FieldType.other,
+                config: {},
+              };
+
+              aggregationField.type = detectFieldType(aggregation, field, aggregationField);
+              fields.push(aggregationField);
             }
           }
 
-          for (const aggregation of aggregations) {
-            const aggregationField: Field = {
-              name: `${fieldName} (${aggregation})`,
-              values: new ArrayVector(valuesByAggregation[aggregation]),
-              type: FieldType.other,
-              config: {},
-            };
-
-            aggregationField.type = detectFieldType(aggregation, field, aggregationField);
-            fields.push(aggregationField);
-          }
+          processed.push({
+            fields,
+            length: valuesByGroupKey.size,
+          });
         }
 
-        processed.push({
-          fields,
-          length: groupKeys.length,
-        });
-      }
-
-      return processed;
-    };
-  },
+        return processed;
+      })
+    ),
 };
 
 const shouldGroupOnField = (field: Field, options: GroupByTransformerOptions): boolean => {
